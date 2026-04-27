@@ -37,6 +37,7 @@ import {
   isDisposableEmail as sbIsDisposableEmail,
 } from './lib/supabase.js';
 import { watchNetwork, isNativePlatform } from './lib/platform.js';
+import { checkPasswordStrength, isPasswordPwned } from './lib/passwordSecurity.js';
 
 /* -------------------------------------------------------------------------
    DATA MODEL / MOCK PROFILE (geo-aware: Avignon/Sorgues)
@@ -2473,7 +2474,12 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
       return;
     }
     if (!isValidSiret(form.siret)) { setError("SIRET invalide (14 chiffres)"); return; }
-    if (form.password.length < 8) { setError("Mot de passe : 8 caractères minimum"); return; }
+
+    // Sécurité du mot de passe : check local (longueur + blacklist) + HIBP
+    // (équivalent gratuit du Leaked Password Protection de Supabase Pro).
+    const strength = checkPasswordStrength(form.password);
+    if (!strength.ok) { setError(strength.reason); return; }
+
     if (!form.acceptTerms) { setError("Vous devez accepter les CGU"); return; }
 
     // ANTI-FRAUDE local (device) : même appareil déjà utilisé ?
@@ -2486,6 +2492,15 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
 
     setLoading(true);
     try {
+      // HaveIBeenPwned k-anonymity : bloque les mots de passe figurant dans
+      // une fuite connue. Appel HTTPS sans clé, fail-open en cas de panne.
+      const pwned = await isPasswordPwned(form.password);
+      if (pwned) {
+        setError("Ce mot de passe a été divulgué dans une fuite de données. Choisissez-en un autre.");
+        setLoading(false);
+        return;
+      }
+
       // Vérification SIRET via Edge Function (déjà déployée — Phase 3)
       // On bloque les SIRETs invalides ou non-VTC
       const siretCheck = await sbVerifySiret(form.siret.replace(/\s/g, ""));

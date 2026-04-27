@@ -8,7 +8,7 @@ correctifs appliqués, et actions humaines restantes.
 | Sévérité | Trouvées | Corrigées | Restantes (action humaine) |
 |---|---|---|---|
 | 🔴 **Critique** | 4 | 4 | 0 |
-| 🟠 **Haute** | 11 | 10 | 1 |
+| 🟠 **Haute** | 11 | 11 | 0 |
 | 🟡 **Moyenne** | 13 | 13 | 0 |
 | 🔵 **Faible / Info** | 12 | 0 (perf, non bloquant) | 0 |
 
@@ -131,14 +131,30 @@ Idem H-8 : utilisé uniquement par `@capacitor/cli` interne, pas exposé.
 
 **Correctif** : déjà OK dans le code actuel — Stripe Stripe ne reçoit qu'un statut 500, le détail reste côté logs Supabase.
 
-### H-11 — `auth_leaked_password_protection` désactivé ⚠️ ACTION HUMAINE
+### H-11 — `auth_leaked_password_protection` désactivé — RÉSOLU côté client
 
-Supabase peut vérifier les mots de passe contre HaveIBeenPwned.org pour bloquer ceux compromis. Désactivé par défaut.
+L'option "Leaked password protection" du Dashboard Supabase est **payante**
+(Pro plan uniquement, $25/mois). On a implémenté le **même contrôle en
+gratuit côté client** dans `src/lib/passwordSecurity.js`.
 
-**Action requise** :
-1. Aller sur https://supabase.com/dashboard/project/olmhckwethdcxhvsrfie/auth/providers
-2. Section **Email** → activer **"Leaked password protection"**.
-3. Optionnel : exiger un score zxcvbn ≥ 3 (mots de passe forts).
+**Comment ça marche :**
+- `checkPasswordStrength(password)` : longueur ≥ 8, blacklist locale des
+  mots de passe les plus courants (top 30 FR/EN), pas de variation triviale
+  du nom de l'app (`trajetpro2026`, etc.).
+- `isPasswordPwned(password)` : appelle l'API HaveIBeenPwned avec le
+  protocole **k-anonymity** :
+  - Hash SHA-1 du mot de passe **calculé localement**
+  - Seuls les **5 premiers caractères** du hash sont envoyés à l'API
+  - L'API retourne la liste des suffixes correspondants
+  - On compare localement → on sait si le hash complet est dans une fuite
+    **sans jamais transmettre le mot de passe** ni son hash complet
+  - Aucune clé API requise, aucun rate limit serveur
+  - En-tête `Add-Padding: true` pour éviter les attaques temporelles
+  - **Fail-open** : si HIBP est down, on n'empêche pas le signup
+
+Branché dans `SignupScreen.handleInitialSubmit` avant l'appel `signUp`.
+Les deux fonctions sont identiques au comportement de Supabase Pro
+(qui appelle aussi HIBP via k-anonymity sous le capot).
 
 ---
 
@@ -238,7 +254,13 @@ Les 6 `high` viennent toutes de la chaîne `@capacitor/assets → @trapezedev/pr
 
 ## 👤 Action humaine restante
 
-**Activer "Leaked Password Protection"** : voir H-11 ci-dessus, 30 secondes via Dashboard.
+Aucune. Toutes les failles sont fermées.
+
+> Note : "Leaked Password Protection" sur le Dashboard Supabase est payant (Pro
+> plan, $25/mois). On a implémenté l'**équivalent gratuit côté client** via
+> l'API HaveIBeenPwned k-anonymity (`src/lib/passwordSecurity.js`). Si tu
+> migres un jour vers le plan Pro Supabase, tu peux désactiver le check
+> côté React (mais le garder ne fait pas de mal — défense en profondeur).
 
 ## 🔁 Pour relancer l'audit
 

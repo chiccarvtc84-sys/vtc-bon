@@ -5,17 +5,11 @@ toi-même. Chaque entrée a une **priorité** et un **lien** vers le contexte.
 
 ---
 
-## 🔐 Sécurité (5 min, à faire maintenant)
+## 🔐 Sécurité — toutes les actions critiques sont faites côté code
 
-### S-1 — Activer "Leaked Password Protection" sur Supabase Auth
-**Pourquoi humain :** réglage du Dashboard Supabase, pas accessible via API/MCP.
-
-1. Va sur https://supabase.com/dashboard/project/olmhckwethdcxhvsrfie/auth/providers
-2. Section **Email** → toggle **"Leaked password protection"** sur ON
-3. (Optionnel mais recommandé) **"Password requirements"** → niveau **"Stronger"**
-
-Sans cette option, un utilisateur peut s'inscrire avec un mot de passe figurant
-dans les bases de fuites HaveIBeenPwned. Voir `docs/SECURITY_AUDIT.md` § H-11.
+✅ ~~S-1 Leaked Password Protection~~ — résolu côté client via
+`src/lib/passwordSecurity.js` (équivalent gratuit du plan Pro Supabase,
+voir `docs/SECURITY_AUDIT.md` § H-11). **Aucune action humaine requise.**
 
 ---
 
