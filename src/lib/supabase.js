@@ -286,6 +286,61 @@ export async function loadTokenTransactions(userId) {
   return data;
 }
 
+/**
+ * MODE DEV : achat de tokens sans Stripe.
+ * Crée une transaction de type 'purchase' qui crédite le solde via le trigger.
+ * En production (Phase 5), ce flow passera par l'Edge Function stripe-webhook.
+ */
+export async function purchaseTokensDev(userId, { packageId, tokens, priceTTC }) {
+  // ID factice pour respecter la contrainte unique stripe_payment_intent_id en dev
+  const fakeIntentId = `dev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const { data, error } = await supabase.rpc('credit_token_purchase', {
+    p_user_id: userId,
+    p_tokens: tokens,
+    p_amount_ttc: priceTTC,
+    p_package_id: packageId,
+    p_stripe_intent_id: fakeIntentId,
+  });
+
+  if (error) throw error;
+  if (data !== true) throw new Error('Achat refusé (transaction déjà enregistrée)');
+
+  return { ok: true, intentId: fakeIntentId };
+}
+
+/**
+ * Cherche un utilisateur par son code de parrainage (utilisé au signup
+ * pour valider que le code existe avant de tenter le crédit).
+ */
+export async function findUserByReferralCode(code) {
+  if (!code) return null;
+  const { data, error } = await supabase
+    .from('users')
+    .select('id, name, referral_code')
+    .eq('referral_code', code.toUpperCase())
+    .maybeSingle();
+
+  if (error) {
+    console.warn('Erreur lookup referral code:', error);
+    return null;
+  }
+  return data;
+}
+
+/**
+ * Crédite le bonus de parrainage (parrain +10, filleul +5).
+ * À appeler après que le filleul a confirmé son email.
+ */
+export async function creditReferralBonus(referrerId, refereeId) {
+  const { data, error } = await supabase.rpc('credit_referral_bonus', {
+    p_referrer_id: referrerId,
+    p_referee_id: refereeId,
+  });
+  if (error) throw error;
+  return data === true;
+}
+
 // ----------------------------------------------------------------------------
 // Utilitaires
 // ----------------------------------------------------------------------------

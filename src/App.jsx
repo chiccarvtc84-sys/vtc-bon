@@ -15,6 +15,25 @@ import {
   ChevronDown, BookOpen, MessageCircle, HandCoins, Globe,
   Cloud
 } from 'lucide-react';
+import {
+  supabase,
+  signIn as sbSignIn,
+  signUp as sbSignUp,
+  signOut as sbSignOut,
+  getCurrentUser,
+  loadBookings as sbLoadBookings,
+  loadInvoices as sbLoadInvoices,
+  loadTokenTransactions as sbLoadTokenTransactions,
+  createBooking as sbCreateBooking,
+  updateBooking as sbUpdateBooking,
+  deleteBooking as sbDeleteBooking,
+  createInvoice as sbCreateInvoice,
+  purchaseTokensDev,
+  findUserByReferralCode,
+  creditReferralBonus,
+  verifySiret as sbVerifySiret,
+  isDisposableEmail as sbIsDisposableEmail,
+} from './lib/supabase.js';
 
 /* -------------------------------------------------------------------------
    DATA MODEL / MOCK PROFILE (geo-aware: Avignon/Sorgues)
@@ -65,36 +84,17 @@ const KNOWN_ADDRESSES = [
   { label: "Les Halles Avignon", detail: "Place Pie, Avignon", aliases: ["les halles", "halles"] },
 ];
 
-const INITIAL_BOOKINGS = [
-  { id: "b1", customerName: "Marie Dubois", phone: "+33 6 55 44 33 22",
-    pickupAddress: "Hôtel d'Europe, 12 Place Crillon, Avignon", dropoffAddress: "Gare TGV Avignon",
-    dateTime: "2026-04-23T09:15", passengers: 2, hasLuggage: true, price: 42, distance: 7.2, duration: 15,
-    notes: "Client régulier — bagage cabine uniquement", status: "confirmed", type: "forfait", createdAt: "2026-04-22T18:30" },
-  { id: "b2", customerName: "Laurent Girard", phone: "+33 6 77 88 99 10",
-    pickupAddress: "Gare Avignon Centre", dropoffAddress: "Châteauneuf-du-Pape",
-    dateTime: "2026-04-23T14:30", passengers: 4, hasLuggage: false, price: 68, distance: 18.5, duration: 28,
-    notes: "Dégustation vignoble", status: "confirmed", type: "forfait", createdAt: "2026-04-22T16:12" },
-  { id: "b3", customerName: "Sophie Bernard", phone: "+33 6 12 34 56 90",
-    pickupAddress: "Aéroport Avignon-Provence", dropoffAddress: "Centre Sorgues",
-    dateTime: "2026-04-24T11:00", passengers: 1, hasLuggage: true, price: 55, distance: 14.8, duration: 22,
-    notes: "", status: "pending", type: "forfait", createdAt: "2026-04-21T20:05" },
-];
+// ----- DONNÉES INITIALES -----
+// Les bons, factures et historique de tokens sont désormais chargés depuis
+// Supabase au démarrage. On part toujours de listes vides côté React :
+// `loadUserData()` vient les remplir après le login.
+const INITIAL_BOOKINGS = [];
+const INITIAL_INVOICES = [];
+const INITIAL_TOKEN_HISTORY = [];
 
-const INITIAL_INVOICES = [
-  { id: "i1", number: "FAC-2026-0087", bookingId: "b1", customerName: "Marie Dubois",
-    amount: 42, vatAmount: 4.20, date: "2026-04-22", status: "paid", fingerprint: "a7f3e9d2c1b8f4e5" },
-  { id: "i2", number: "FAC-2026-0088", bookingId: "b2", customerName: "Laurent Girard",
-    amount: 68, vatAmount: 6.80, date: "2026-04-22", status: "pending", fingerprint: "b2c8d1e5f3a7b9c4" },
-];
-
-// Historique initial d'achats de jetons (démo)
-const INITIAL_TOKEN_HISTORY = [
-  { id: "welcome", invoiceNumber: "OFFERT", date: "2026-03-20", package: "Bienvenue",
-    tokens: 5, priceTTC: 0, priceHT: 0, vatAmount: 0, vatApplied: false,
-    vatIntra: "", paymentMethod: "Crédits offerts à l'inscription", isWelcome: true },
-];
-
-// Chaque nouvel inscrit reçoit automatiquement 5 crédits de bienvenue
+// Crédits offerts à l'inscription. Le trigger SQL `handle_new_auth_user`
+// crée la transaction `welcome` (+5) côté serveur ; ces constantes restent
+// utiles pour l'affichage côté client (textes, valeurs par défaut).
 const INITIAL_TOKEN_BALANCE = 5;
 const WELCOME_TOKENS = 5;
 
@@ -194,38 +194,10 @@ const shouldGrantMonthlyBonus = (lastBonusIso) => {
   return last.getFullYear() !== now.getFullYear() || last.getMonth() !== now.getMonth();
 };
 
-// Mock de compte de démonstration
-const DEMO_USER = {
-  id: "u_demo001",
-  email: "contact@trajetpro.fr",
-  phone: "+33 6 12 34 56 78",
-  name: "Moi Conducteur",
-  password: "demo123", // En production : JAMAIS stocker en clair, utiliser hash côté serveur
-  referralCode: "TRPV-84XY",
-  referredBy: null,
-  createdAt: "2026-03-20",
-  lastMonthlyBonus: "2026-03-01", // Simulé : pas reçu depuis longtemps, donc sera donné au login
-  referralStats: {
-    invitedCount: 2,
-    tokensEarned: 20,
-    friends: [
-      { name: "Laurent Martin", joinedAt: "2026-03-28", code: "LMA-3K2X" },
-      { name: "Sophie Durand", joinedAt: "2026-04-10", code: "SDU-9PR4" },
-    ],
-  },
-  // Champs anti-fraude
-  phoneVerified: true,
-  emailVerified: true,
-  siretVerified: true,      // Validation INSEE du SIRET (VTC obligatoirement inscrit)
-  vtcLicenseVerified: true, // Validation du numéro EVTC via registre officiel
-  deviceFingerprint: null,  // Sera rempli au login
-  deviceRegisteredAt: "2026-03-20",
-  riskScore: 0,
-  flagged: false,
-};
-
-// Liste (simulée) des comptes déjà enregistrés sur cet appareil
-// En production : stocké côté serveur avec hash du fingerprint
+// NOTE : DEMO_USER (mock de compte de démonstration) supprimé en Phase 4.5.
+// L'authentification passe désormais par Supabase Auth (email + mot de passe).
+// La vérification anti-fraude device_fingerprint est encore en mémoire locale ;
+// la migration vers la table `device_fingerprints` est listée dans TODO_HUMAN.md.
 const KNOWN_DEVICES = new Map(); // fingerprint -> { accountId, firstSeen, accountsCount }
 
 /* -------------------------------------------------------------------------
@@ -2343,24 +2315,35 @@ function WelcomeScreen({ onChangeMode, onGuest }) {
 }
 
 function LoginScreen({ onChangeMode, onLogin }) {
-  const [email, setEmail] = useState("contact@trajetpro.fr");
-  const [password, setPassword] = useState("demo123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const submit = () => {
+  const submit = async () => {
     setError("");
     if (!email || !password) { setError("Email et mot de passe requis"); return; }
     setLoading(true);
-    setTimeout(() => {
-      if (email === DEMO_USER.email && password === DEMO_USER.password) {
-        onLogin(DEMO_USER);
-      } else {
-        setError("Identifiants incorrects. Essayez le compte démo : contact@trajetpro.fr / demo123");
-        setLoading(false);
+    try {
+      // Connexion via Supabase Auth + bonus mensuel automatique côté helper
+      const { user } = await sbSignIn(email.trim().toLowerCase(), password);
+      if (!user) {
+        throw new Error("Connexion impossible");
       }
-    }, 800);
+      // onLogin va déclencher useEffect qui charge le profil + données depuis Supabase
+      onLogin({ id: user.id, email: user.email });
+    } catch (err) {
+      const msg = err?.message || "";
+      if (/invalid login credentials/i.test(msg)) {
+        setError("Email ou mot de passe incorrect");
+      } else if (/email not confirmed/i.test(msg)) {
+        setError("Vous devez d'abord confirmer votre email (lien envoyé à l'inscription)");
+      } else {
+        setError(msg || "Erreur de connexion");
+      }
+      setLoading(false);
+    }
   };
 
   return (
@@ -2412,12 +2395,6 @@ function LoginScreen({ onChangeMode, onLogin }) {
           {loading ? <><Loader2 size={16} style={{ animation: "tp-spin 1s linear infinite" }}/> Connexion...</> : <><LogIn size={16}/> Se connecter</>}
         </button>
 
-        <div className="tp-card" style={{ padding: 12, background: "var(--surface-2)", marginTop: 8, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.6 }}>
-          <div style={{ color: "var(--accent)", fontWeight: 700, marginBottom: 4, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>🔑 Compte de démonstration</div>
-          Email : <b style={{ color: "var(--text)" }}>contact@trajetpro.fr</b><br/>
-          Mot de passe : <b style={{ color: "var(--text)" }}>demo123</b>
-        </div>
-
         <div style={{ textAlign: "center", fontSize: 12, color: "var(--text-dim)", marginTop: 12 }}>
           Pas encore de compte ?{" "}
           <button onClick={() => onChangeMode("signup")} style={{ color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 700, padding: 0 }}>
@@ -2454,15 +2431,24 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
     return /^(?:\+33|0)[1-9]\d{8}$/.test(clean);
   };
 
-  const handleInitialSubmit = () => {
+  const handleInitialSubmit = async () => {
     setError("");
     if (!form.name) { setError("Votre nom est requis"); return; }
     if (!form.email || !/\S+@\S+\.\S+/.test(form.email)) { setError("Email invalide"); return; }
 
-    // Bloquer les emails jetables (anti-fraude n°1 sans SMS)
-    if (isDisposableEmail(form.email)) {
-      setError("Les emails jetables ne sont pas autorisés. Utilisez votre email professionnel.");
-      return;
+    // Bloquer les emails jetables (anti-fraude n°1 sans SMS) — vérification serveur
+    try {
+      const blocked = await sbIsDisposableEmail(form.email);
+      if (blocked) {
+        setError("Les emails jetables ne sont pas autorisés. Utilisez votre email professionnel.");
+        return;
+      }
+    } catch (e) {
+      // En cas d'erreur réseau, on tombe sur la liste locale (sécurité défensive)
+      if (isDisposableEmail(form.email)) {
+        setError("Les emails jetables ne sont pas autorisés. Utilisez votre email professionnel.");
+        return;
+      }
     }
 
     if (form.phone && !isValidPhone(form.phone)) {
@@ -2473,73 +2459,84 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
     if (form.password.length < 8) { setError("Mot de passe : 8 caractères minimum"); return; }
     if (!form.acceptTerms) { setError("Vous devez accepter les CGU"); return; }
 
-    setLoading(true);
-    setTimeout(() => {
-      // VÉRIFICATION ANTI-FRAUDE : est-ce que cet appareil a déjà été utilisé ?
-      const fingerprint = generateDeviceFingerprint();
-      const deviceRecord = KNOWN_DEVICES.get(fingerprint);
+    // ANTI-FRAUDE local (device) : même appareil déjà utilisé ?
+    const fingerprint = generateDeviceFingerprint();
+    const deviceRecord = KNOWN_DEVICES.get(fingerprint);
+    if (deviceRecord && deviceRecord.accountsCount >= FRAUD_THRESHOLDS.maxAccountsPerDevice) {
+      onDeviceAlreadyUsed(deviceRecord);
+      return;
+    }
 
-      if (deviceRecord && deviceRecord.accountsCount >= FRAUD_THRESHOLDS.maxAccountsPerDevice) {
+    setLoading(true);
+    try {
+      // Vérification SIRET via Edge Function (déjà déployée — Phase 3)
+      // On bloque les SIRETs invalides ou non-VTC
+      const siretCheck = await sbVerifySiret(form.siret.replace(/\s/g, ""));
+      if (!siretCheck?.valid) {
+        const reason = siretCheck?.reason || "SIRET introuvable ou activité non éligible (VTC)";
+        setError(`SIRET invalide : ${reason}`);
         setLoading(false);
-        onDeviceAlreadyUsed(deviceRecord);
         return;
       }
 
-      // Créer l'utilisateur "en attente" (crédits bloqués jusqu'à validation email)
-      const newUser = {
-        id: "u_" + Math.random().toString(36).slice(2, 10),
-        email: form.email,
-        phone: form.phone || "",
-        name: form.name,
-        siret: form.siret,
+      // Si un code de parrainage est fourni, on vérifie qu'il existe
+      let referrerInfo = null;
+      const refCode = form.referralCode.trim();
+      if (refCode) {
+        referrerInfo = await findUserByReferralCode(refCode);
+        if (!referrerInfo) {
+          setError(`Code de parrainage "${refCode}" inconnu.`);
+          setLoading(false);
+          return;
+        }
+      }
+
+      // Création du compte via Supabase Auth.
+      // Le trigger SQL `handle_new_auth_user` (déployé) crée auto le profil
+      // dans public.users + transaction 'welcome' (+5 crédits).
+      await sbSignUp({
+        email: form.email.trim().toLowerCase(),
         password: form.password,
-        referralCode: generateReferralCode(form.name),
-        referredBy: form.referralCode.trim() || null,
-        createdAt: new Date().toISOString().slice(0,10),
-        lastMonthlyBonus: new Date().toISOString().slice(0,10),
-        referralStats: { invitedCount: 0, tokensEarned: 0, friends: [] },
-        phoneVerified: false,    // Non applicable (plus de SMS)
-        emailVerified: false,    // Sera true après clic sur lien email
-        siretVerified: true,     // Simulé : vérifié via API INSEE (gratuit)
-        vtcLicenseVerified: false,
-        deviceFingerprint: fingerprint,
-        deviceRegisteredAt: new Date().toISOString(),
-        riskScore: calculateRiskScore({
-          emailVerified: false, siretVerified: true,
-          deviceKnown: false, ipKnown: 1,
-          accountAgeDays: 0, referralCount: 0,
-        }),
-        flagged: false,
-      };
+        name: form.name,
+        phone: form.phone || null,
+        siret: form.siret.replace(/\s/g, ""),
+        referredBy: refCode || null,
+      });
 
-      setPendingUser(newUser);
-      setLoading(false);
-      setStep("email_sent");
-    }, 800);
-  };
-
-  // Simule le clic sur le lien de validation reçu par email
-  // En production : le serveur reçoit le clic et redirige vers l'app
-  const handleValidateEmail = () => {
-    setLoading(true);
-    setTimeout(() => {
-      const fingerprint = generateDeviceFingerprint();
+      // Marquer cet appareil comme utilisé (anti-fraude local)
       KNOWN_DEVICES.set(fingerprint, {
-        accountId: pendingUser.id,
+        accountId: form.email,
         firstSeen: new Date().toISOString(),
         accountsCount: (KNOWN_DEVICES.get(fingerprint)?.accountsCount || 0) + 1,
       });
-      const verifiedUser = {
-        ...pendingUser,
-        emailVerified: true,
-        riskScore: calculateRiskScore({
-          emailVerified: true, siretVerified: true,
-          deviceKnown: false, ipKnown: 1,
-          accountAgeDays: 0, referralCount: 0,
-        }),
-      };
-      onSignup(verifiedUser, !!form.referralCode.trim());
-    }, 700);
+
+      setPendingUser({
+        email: form.email,
+        name: form.name,
+        usedReferralCode: !!refCode,
+        referrerName: referrerInfo?.name || null,
+      });
+      setStep("email_sent");
+    } catch (err) {
+      const msg = err?.message || "Erreur d'inscription";
+      if (/already registered|already exists|user already/i.test(msg)) {
+        setError("Un compte existe déjà pour cet email. Essayez de vous connecter.");
+      } else if (/password/i.test(msg) && /6|short|weak/i.test(msg)) {
+        setError("Mot de passe trop faible (8 caractères minimum)");
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // L'utilisateur a vu l'email envoyé : on le redirige vers l'écran de login.
+  // Quand il se connectera (après avoir cliqué sur le lien Supabase),
+  // le useEffect d'auth state du composant App chargera son profil et
+  // créditera le bonus de parrainage si nécessaire.
+  const handleValidateEmail = () => {
+    onChangeMode("login");
   };
 
   const hasReferralCode = form.referralCode.trim().length >= 4;
@@ -2571,28 +2568,27 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
           </div>
         </div>
 
-        {/* DÉMO : bouton pour simuler le clic sur le lien email */}
-        <div className="tp-card" style={{ padding: 14, background: "var(--warn-soft)", borderColor: "rgba(251,191,36,0.3)", marginBottom: 16 }}>
-          <div style={{ fontSize: 11, color: "var(--warn)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
-            [Mode démo]
+        <div className="tp-card" style={{ padding: 14, background: "var(--surface-2)", marginBottom: 16, fontSize: 12, color: "var(--text-dim)", lineHeight: 1.6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <CheckCircle2 size={15} style={{ color: "var(--success)" }}/>
+            <b style={{ color: "var(--text)" }}>Compte créé avec succès</b>
           </div>
-          <div style={{ fontSize: 12, color: "var(--text-dim)", lineHeight: 1.5, marginBottom: 10 }}>
-            En production, l'utilisateur clique sur le lien reçu dans sa boîte mail. Pour simuler, appuyez sur le bouton ci-dessous.
-          </div>
-          <button onClick={handleValidateEmail} disabled={loading} className="tp-btn tp-btn-primary" style={{ width: "100%", padding: "12px", fontSize: 13 }}>
-            {loading ? <><Loader2 size={15} style={{ animation: "tp-spin 1s linear infinite" }}/> Validation...</> : <><CheckCircle2 size={15}/> J'ai cliqué sur le lien</>}
-          </button>
+          Ouvrez votre boîte mail, cliquez sur le lien de confirmation, puis revenez vous connecter ici.
+          {pendingUser?.usedReferralCode && (
+            <div style={{ marginTop: 8, padding: 8, borderRadius: 8, background: "rgba(74,222,128,0.08)", color: "var(--success)" }}>
+              <Gift size={11} style={{ display: "inline", verticalAlign: "middle" }}/> Parrainage par <b>{pendingUser?.referrerName || form.referralCode}</b> validé.
+              {" "}+{REFERRAL_BONUS_REFEREE} crédits seront ajoutés à votre première connexion.
+            </div>
+          )}
         </div>
 
-        <div style={{ textAlign: "center" }}>
-          <button style={{
-            background: "none", border: "none", color: "var(--accent)",
-            fontSize: 12, fontWeight: 600, cursor: "pointer", padding: 8,
-          }}>
-            Je n'ai pas reçu l'email · Renvoyer
-          </button>
-          <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 8, lineHeight: 1.5 }}>
-            Pensez à vérifier vos spams ou votre dossier Courrier indésirable.
+        <button onClick={handleValidateEmail} className="tp-btn tp-btn-primary" style={{ width: "100%", padding: "14px", fontSize: 14 }}>
+          <LogIn size={15}/> Aller à la connexion
+        </button>
+
+        <div style={{ textAlign: "center", marginTop: 16 }}>
+          <div style={{ fontSize: 10, color: "var(--muted)", lineHeight: 1.5 }}>
+            Vous n'avez pas reçu l'email ? Vérifiez vos spams ou votre dossier Courrier indésirable.
           </div>
         </div>
       </div>
@@ -3302,6 +3298,107 @@ const DEFAULT_PREFERENCES = {
   biometric: true, autoBackup: true,
 };
 
+// Convertit une ligne `bookings` Supabase vers le format utilisé côté React.
+// Le code historique manipule des objets en camelCase ; la DB est en snake_case.
+function bookingFromDb(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    customerName: row.customer_name,
+    phone: row.customer_phone || "",
+    email: row.customer_email || "",
+    pickupAddress: row.pickup_address,
+    dropoffAddress: row.dropoff_address,
+    dateTime: row.pickup_datetime ? row.pickup_datetime.slice(0, 16) : "",
+    passengers: row.passengers || 1,
+    hasLuggage: !!row.has_luggage,
+    childSeat: !!row.child_seat,
+    distance: row.distance_km ? Number(row.distance_km) : 0,
+    duration: row.duration_min || 0,
+    price: row.price_ttc ? Number(row.price_ttc) : 0,
+    notes: row.notes || "",
+    type: row.type || "manual",
+    status: row.status || "pending",
+    createdAt: row.created_at,
+  };
+}
+
+function invoiceFromDb(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    number: row.invoice_number,
+    bookingId: row.booking_id,
+    customerName: row.customer_name,
+    amount: row.amount_ttc ? Number(row.amount_ttc) : 0,
+    vatAmount: row.amount_vat ? Number(row.amount_vat) : 0,
+    date: row.issued_at ? row.issued_at.slice(0, 10) : "",
+    status: row.status || "pending",
+    fingerprint: row.fingerprint,
+  };
+}
+
+function tokenTxFromDb(row) {
+  if (!row) return null;
+  // Mapping vers le format historique côté React (champ "tokens", "package", etc.)
+  const isCredit = row.tokens_delta > 0;
+  const labels = {
+    welcome: "Bienvenue",
+    purchase: row.package_id ? `Pack ${row.package_id}` : "Achat de crédits",
+    monthly_bonus: "Fidélité mensuelle",
+    referral_bonus: "Bonus parrainage",
+    admin_credit: "Crédit administrateur",
+    consume_booking: "Bon de course créé",
+    consume_invoice: "Facture émise",
+    refund: "Remboursement",
+    expiration: "Expiration",
+  };
+  return {
+    id: row.id,
+    invoiceNumber: row.invoice_number || (row.kind === 'welcome' ? 'OFFERT' : (row.kind?.startsWith('consume') ? '—' : 'BONUS')),
+    date: row.created_at ? row.created_at.slice(0, 10) : "",
+    package: labels[row.kind] || row.kind,
+    tokens: row.tokens_delta,
+    priceTTC: row.amount_ttc ? Number(row.amount_ttc) : 0,
+    priceHT: row.amount_ht ? Number(row.amount_ht) : 0,
+    vatAmount: row.amount_vat ? Number(row.amount_vat) : 0,
+    vatApplied: !!row.vat_applied,
+    vatIntra: row.vat_intra || "",
+    paymentMethod: row.payment_method || (isCredit ? "Bonus" : "—"),
+    isWelcome: ['welcome', 'monthly_bonus', 'referral_bonus'].includes(row.kind),
+    kind: row.kind,
+  };
+}
+
+function profileFromDb(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    phone: row.phone || "",
+    siret: row.siret,
+    referralCode: row.referral_code,
+    referredBy: row.referred_by,
+    createdAt: row.created_at,
+    lastMonthlyBonus: row.last_monthly_bonus_at,
+    referralStats: {
+      invitedCount: row.referrals_count || 0,
+      tokensEarned: 0,    // calculé séparément si besoin
+      friends: [],
+    },
+    phoneVerified: false,
+    emailVerified: !!row.email_verified,
+    siretVerified: !!row.siret_verified,
+    vtcLicenseVerified: false,
+    deviceFingerprint: row.device_fingerprint,
+    deviceRegisteredAt: row.created_at,
+    riskScore: row.risk_score || 0,
+    flagged: !!row.flagged,
+    tokenBalance: row.token_balance || 0,
+  };
+}
+
 export default function App() {
   // --- Auth state ---
   // authScreen: "welcome" | "login" | "signup" | "device_blocked" | null
@@ -3309,6 +3406,8 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [isGuest, setIsGuest] = useState(false);
   const [blockedAccountInfo, setBlockedAccountInfo] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [dataLoading, setDataLoading] = useState(false);
 
   // --- App state ---
   const [tab, setTab] = useState("home");
@@ -3332,69 +3431,146 @@ export default function App() {
 
   const isAuthenticated = !!currentUser || isGuest;
 
-  // --- Bonus mensuel : attribué automatiquement à chaque connexion si nouveau mois ---
-  const grantMonthlyBonusIfDue = (user) => {
-    if (!user) return user;
-    if (shouldGrantMonthlyBonus(user.lastMonthlyBonus)) {
-      const updatedUser = { ...user, lastMonthlyBonus: new Date().toISOString().slice(0,10) };
-      setCurrentUser(updatedUser);
-      setTokenBalance(t => t + MONTHLY_BONUS_TOKENS);
-      setTokenHistory(prev => [{
-        id: "monthly_" + Date.now(),
-        invoiceNumber: "BONUS",
-        date: new Date().toISOString().slice(0,10),
-        package: "Fidélité mensuelle",
-        tokens: MONTHLY_BONUS_TOKENS,
-        priceTTC: 0, priceHT: 0, vatAmount: 0, vatApplied: false,
-        vatIntra: "", paymentMethod: "Bonus fidélité",
-        isWelcome: true,
-      }, ...prev]);
-      setTimeout(() => setMonthlyBonusOpen(true), 600);
-      return updatedUser;
+  // --- Chargement des données utilisateur depuis Supabase ---
+  // Appelé après login (ou au reload si la session existait déjà).
+  // Charge profil + bookings + invoices + token_transactions.
+  // Crédite aussi le bonus de parrainage si c'est la première connexion d'un filleul.
+  const loadUserData = async (authUserId) => {
+    if (!authUserId) return;
+    setDataLoading(true);
+    try {
+      // Profil (avec retry court : le trigger SQL crée le profil juste après le signup,
+      // mais à la 1re connexion il peut y avoir 100-300ms de race)
+      let profileRow = null;
+      for (let attempt = 0; attempt < 5 && !profileRow; attempt++) {
+        const { data, error } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', authUserId)
+          .maybeSingle();
+        if (!error && data) profileRow = data;
+        else if (attempt < 4) await new Promise(r => setTimeout(r, 250));
+      }
+      if (!profileRow) {
+        console.error("Profil introuvable après login — trigger handle_new_auth_user a peut-être échoué");
+        setDataLoading(false);
+        return;
+      }
+      const profile = profileFromDb(profileRow);
+
+      // Crédit du bonus de parrainage si c'est la 1re connexion d'un filleul
+      // (referred_by rempli mais aucune transaction referral_bonus reçue)
+      if (profile.referredBy) {
+        const { data: existing } = await supabase
+          .from('token_transactions')
+          .select('id')
+          .eq('user_id', authUserId)
+          .eq('kind', 'referral_bonus')
+          .limit(1);
+        if (!existing || existing.length === 0) {
+          const referrer = await findUserByReferralCode(profile.referredBy);
+          if (referrer && referrer.id !== authUserId) {
+            try {
+              await creditReferralBonus(referrer.id, authUserId);
+            } catch (e) {
+              console.warn("Crédit parrainage échoué :", e?.message);
+            }
+          }
+        }
+      }
+
+      // Bonus mensuel (le helper signIn() l'appelle déjà côté login,
+      // mais on rappelle ici au cas où on rentre via session restaurée)
+      try {
+        await supabase.rpc('credit_monthly_bonus', { p_user_id: authUserId });
+      } catch (_) { /* silencieux */ }
+
+      // Recharge le profil pour avoir le solde à jour (après bonus parrainage/mensuel)
+      const { data: refreshed } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', authUserId)
+        .single();
+      const finalProfile = profileFromDb(refreshed || profileRow);
+
+      // Bookings + Invoices + Token transactions en parallèle
+      const [bookingRows, invoiceRows, tokenRows] = await Promise.all([
+        sbLoadBookings(authUserId).catch(() => []),
+        sbLoadInvoices(authUserId).catch(() => []),
+        sbLoadTokenTransactions(authUserId).catch(() => []),
+      ]);
+
+      setCurrentUser(finalProfile);
+      setBookings(bookingRows.map(bookingFromDb).filter(Boolean));
+      setInvoices(invoiceRows.map(invoiceFromDb).filter(Boolean));
+      setTokenBalance(finalProfile.tokenBalance);
+      setTokenHistory(tokenRows.map(tokenTxFromDb).filter(Boolean));
+    } catch (err) {
+      console.error("Erreur chargement données :", err);
+    } finally {
+      setDataLoading(false);
     }
-    return user;
   };
+
+  // --- Auth state listener : se synchronise avec Supabase au mount + sur changements ---
+  useEffect(() => {
+    let mounted = true;
+
+    // Vérifier la session existante au démarrage
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (mounted) {
+        if (session?.user) {
+          setAuthScreen(null);
+          setIsGuest(false);
+          await loadUserData(session.user.id);
+        }
+        setAuthChecked(true);
+      }
+    })();
+
+    // Écouter les changements (login/logout depuis n'importe où)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!mounted) return;
+      if (event === 'SIGNED_IN' && session?.user) {
+        setAuthScreen(null);
+        setIsGuest(false);
+        await loadUserData(session.user.id);
+        setTab("home");
+      } else if (event === 'SIGNED_OUT') {
+        setCurrentUser(null);
+        setIsGuest(false);
+        setBookings([]);
+        setInvoices([]);
+        setTokenBalance(0);
+        setTokenHistory([]);
+        setAuthScreen("welcome");
+        setTab("home");
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription?.unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // --- Auth handlers ---
+  // onLogin est invoqué par LoginScreen après un sbSignIn() réussi.
+  // Le useEffect ci-dessus a déjà déclenché loadUserData via onAuthStateChange,
+  // mais on s'assure ici de l'UI immédiate.
   const onLogin = (user) => {
-    setCurrentUser(user);
     setIsGuest(false);
     setAuthScreen(null);
     setTab("home");
-    // Vérifier bonus mensuel
-    grantMonthlyBonusIfDue(user);
+    // loadUserData sera appelé automatiquement par onAuthStateChange
   };
 
-  const onSignup = (user, usedReferralCode) => {
-    let bonusTokens = WELCOME_TOKENS;
-    const newHistory = [{
-      id: "welcome_" + user.id, invoiceNumber: "OFFERT",
-      date: new Date().toISOString().slice(0,10), package: "Bienvenue",
-      tokens: WELCOME_TOKENS, priceTTC: 0, priceHT: 0, vatAmount: 0,
-      vatApplied: false, vatIntra: "", paymentMethod: "Crédits offerts à l'inscription",
-      isWelcome: true,
-    }];
-
-    if (usedReferralCode) {
-      bonusTokens += REFERRAL_BONUS_REFEREE;
-      newHistory.unshift({
-        id: "referral_" + user.id, invoiceNumber: "PARRAIN",
-        date: new Date().toISOString().slice(0,10), package: "Bonus parrainage",
-        tokens: REFERRAL_BONUS_REFEREE, priceTTC: 0, priceHT: 0, vatAmount: 0,
-        vatApplied: false, vatIntra: "", paymentMethod: `Inscrit avec le code ${user.referredBy}`,
-        isWelcome: true,
-      });
-    }
-
-    setCurrentUser(user);
-    setIsGuest(false);
-    setAuthScreen(null);
-    setTokenBalance(bonusTokens);
-    setTokenHistory(newHistory);
-    // Démo : on repart d'une liste de courses vide pour un vrai nouvel inscrit
-    setBookings([]);
-    setInvoices([]);
-    setTab("home");
+  // onSignup n'est plus appelé directement (le SignupScreen redirige maintenant
+  // vers l'écran de login après confirmation email). Conservé pour rétrocompat.
+  const onSignup = () => {
+    setAuthScreen("login");
   };
 
   const onGuest = () => {
@@ -3402,25 +3578,31 @@ export default function App() {
     setCurrentUser(null);
     setAuthScreen(null);
     setTab("home");
-    // Mode invité : on laisse les données démo pour qu'il puisse essayer
+    // Mode invité : pas de chargement Supabase, l'app reste en lecture-seule mock
   };
 
-  const onLogout = () => {
+  const onLogout = async () => {
     if (isGuest) {
       // En mode invité, "Déconnexion" propose plutôt de créer un compte
       setAuthScreen("signup");
       return;
     }
     if (!confirm("Vous déconnecter ? Vos données sont sauvegardées dans le cloud, vous pourrez les retrouver en vous reconnectant.")) return;
-    setCurrentUser(null);
-    setIsGuest(false);
-    setAuthScreen("welcome");
-    // Reset state (en prod : les données restent en base, on vide juste le cache local)
-    setTokenBalance(INITIAL_TOKEN_BALANCE);
-    setTokenHistory(INITIAL_TOKEN_HISTORY);
-    setBookings(INITIAL_BOOKINGS);
-    setInvoices(INITIAL_INVOICES);
-    setTab("home");
+    try {
+      await sbSignOut();
+      // onAuthStateChange('SIGNED_OUT') va nettoyer le state et rediriger
+    } catch (err) {
+      console.error("Erreur déconnexion :", err);
+      // Fallback : reset manuel
+      setCurrentUser(null);
+      setIsGuest(false);
+      setAuthScreen("welcome");
+      setTokenBalance(0);
+      setTokenHistory([]);
+      setBookings([]);
+      setInvoices([]);
+      setTab("home");
+    }
   };
 
   const onPromptSignup = () => {
@@ -3462,7 +3644,38 @@ export default function App() {
     setFormOpen(true);
   };
 
-  const onSaveBooking = (b) => {
+  // --- Helper : recharge le solde + l'historique depuis Supabase ---
+  // Utilisé après chaque opération qui modifie token_balance via le serveur,
+  // pour rester en sync avec la "source unique de vérité" (token_transactions).
+  const refreshTokens = async () => {
+    if (!currentUser?.id) return;
+    try {
+      const [{ data: profile }, txs] = await Promise.all([
+        supabase.from('users').select('token_balance').eq('id', currentUser.id).single(),
+        sbLoadTokenTransactions(currentUser.id).catch(() => []),
+      ]);
+      if (profile) setTokenBalance(profile.token_balance || 0);
+      setTokenHistory(txs.map(tokenTxFromDb).filter(Boolean));
+    } catch (err) {
+      console.warn("Refresh tokens échoué :", err);
+    }
+  };
+
+  const onSaveBooking = async (b) => {
+    if (isGuest) {
+      // Mode invité : pas de persistance, juste local
+      setBookings(prev => {
+        const exists = prev.find(p => p.id === b.id);
+        if (exists) return prev.map(p => p.id === b.id ? b : p);
+        return [b, ...prev];
+      });
+      setFormOpen(false);
+      setFormInitial(null);
+      setTab("bookings");
+      return;
+    }
+    if (!currentUser?.id) return;
+
     const isNew = !bookings.find(p => p.id === b.id);
     if (isNew && tokenBalance < COST_BOOKING) {
       setFormOpen(false);
@@ -3470,48 +3683,115 @@ export default function App() {
       setInsufficientOpen(true);
       return;
     }
-    setBookings(prev => {
-      const exists = prev.find(p => p.id === b.id);
-      if (exists) return prev.map(p => p.id === b.id ? b : p);
-      return [b, ...prev];
-    });
-    if (isNew) setTokenBalance(t => t - COST_BOOKING);
-    setFormOpen(false);
-    setFormInitial(null);
-    setTab("bookings");
+
+    try {
+      if (isNew) {
+        const created = await sbCreateBooking(currentUser.id, b);
+        const formatted = bookingFromDb(created);
+        setBookings(prev => [formatted, ...prev]);
+        await refreshTokens();
+      } else {
+        await sbUpdateBooking(b.id, b);
+        setBookings(prev => prev.map(p => p.id === b.id ? b : p));
+      }
+      setFormOpen(false);
+      setFormInitial(null);
+      setTab("bookings");
+    } catch (err) {
+      const msg = err?.message || "Erreur lors de l'enregistrement";
+      if (/cr[ée]dits insuffisants/i.test(msg)) {
+        setFormOpen(false);
+        setPendingActionLabel("créer ce bon de course");
+        setInsufficientOpen(true);
+      } else {
+        alert(`Erreur : ${msg}`);
+      }
+    }
   };
 
-  const onDeleteBooking = (b) => {
+  const onDeleteBooking = async (b) => {
     if (!confirm(`Supprimer le bon pour ${b.customerName} ?`)) return;
-    setBookings(prev => prev.filter(p => p.id !== b.id));
-    setDetailBooking(null);
+
+    if (isGuest || !currentUser?.id) {
+      setBookings(prev => prev.filter(p => p.id !== b.id));
+      setDetailBooking(null);
+      return;
+    }
+
+    try {
+      await sbDeleteBooking(b.id);
+      setBookings(prev => prev.filter(p => p.id !== b.id));
+      setDetailBooking(null);
+    } catch (err) {
+      alert(`Erreur lors de la suppression : ${err?.message || err}`);
+    }
   };
 
-  const onInvoiceBooking = (b) => {
+  const onInvoiceBooking = async (b) => {
     if (tokenBalance < COST_INVOICE) {
       setPendingActionLabel("émettre cette facture");
       setInsufficientOpen(true);
       return;
     }
-    const nextNumber = `FAC-2026-${String(89 + invoices.length).padStart(4, "0")}`;
-    const newInvoice = {
-      id: genId(), number: nextNumber, bookingId: b.id,
-      customerName: b.customerName, amount: b.price,
-      vatAmount: +(b.price * (DRIVER_PROFILE.vatRate/100) / (1 + DRIVER_PROFILE.vatRate/100)).toFixed(2),
-      date: new Date().toISOString().slice(0,10),
-      status: "pending",
-      fingerprint: genFingerprint(),
-    };
-    setInvoices(prev => [newInvoice, ...prev]);
-    setTokenBalance(t => t - COST_INVOICE);
-    setDetailBooking(null);
-    setTab("home");
-    setDetailInvoice(newInvoice);
+
+    if (isGuest || !currentUser?.id) {
+      // Mode invité : facture en mémoire uniquement
+      const nextNumber = `FAC-2026-${String(89 + invoices.length).padStart(4, "0")}`;
+      const newInvoice = {
+        id: genId(), number: nextNumber, bookingId: b.id,
+        customerName: b.customerName, amount: b.price,
+        vatAmount: +(b.price * (DRIVER_PROFILE.vatRate / 100) / (1 + DRIVER_PROFILE.vatRate / 100)).toFixed(2),
+        date: new Date().toISOString().slice(0, 10),
+        status: "pending",
+        fingerprint: genFingerprint(),
+      };
+      setInvoices(prev => [newInvoice, ...prev]);
+      setTokenBalance(t => t - COST_INVOICE);
+      setDetailBooking(null);
+      setTab("home");
+      setDetailInvoice(newInvoice);
+      return;
+    }
+
+    try {
+      const created = await sbCreateInvoice(currentUser.id, b);
+      const formatted = invoiceFromDb(created);
+      setInvoices(prev => [formatted, ...prev]);
+      await refreshTokens();
+      setDetailBooking(null);
+      setTab("home");
+      setDetailInvoice(formatted);
+    } catch (err) {
+      const msg = err?.message || "Erreur lors de l'émission";
+      if (/cr[ée]dits insuffisants/i.test(msg)) {
+        setPendingActionLabel("émettre cette facture");
+        setInsufficientOpen(true);
+      } else {
+        alert(`Erreur : ${msg}`);
+      }
+    }
   };
 
-  const onPurchaseConfirm = (purchase) => {
-    setTokenBalance(t => t + purchase.tokens);
-    setTokenHistory(prev => [purchase, ...prev]);
+  const onPurchaseConfirm = async (purchase) => {
+    // En mode invité : pas de persistance, on simule
+    if (isGuest || !currentUser?.id) {
+      setTokenBalance(t => t + purchase.tokens);
+      setTokenHistory(prev => [purchase, ...prev]);
+      return;
+    }
+
+    // En dev : on enregistre via la RPC credit_token_purchase (pas de Stripe)
+    // En prod (Phase 5) : ce flow sera remplacé par Stripe Checkout + webhook
+    try {
+      await purchaseTokensDev(currentUser.id, {
+        packageId: purchase.packageId || purchase.package || 'pack_unknown',
+        tokens: purchase.tokens,
+        priceTTC: purchase.priceTTC || 0,
+      });
+      await refreshTokens();
+    } catch (err) {
+      alert(`Erreur lors de l'achat : ${err?.message || err}`);
+    }
   };
 
   const onInsufficientBuy = () => {
