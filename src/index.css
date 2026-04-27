@@ -1,0 +1,86 @@
+/* TrajetPro — global styles
+   Charte : fond noir profond #0B0B0D, doré #F4B942
+   Polices : Fraunces (titres) + Plus Jakarta Sans (corps)
+*/
+
+:root {
+  --tp-bg: #0B0B0D;
+  --tp-gold: #F4B942;
+  --tp-text: #F5F5F4;
+  --tp-text-muted: rgba(245, 245, 244, 0.7);
+  --tp-surface: #141417;
+  --tp-surface-hi: #1C1C20;
+  --tp-border: rgba(244, 185, 66, 0.18);
+  --tp-danger: #EF4444;
+  --tp-success: #10B981;
+  --tp-radius: 14px;
+  --tp-font-display: 'Fraunces', Georgia, serif;
+  --tp-font-body: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--tp-bg);
+  color: var(--tp-text);
+  font-family: var(--tp-font-body);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior: none;
+}
+
+body {
+  /* Safe area iOS notch / dynamic island */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--tp-font-display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+/* Scrollbars discrètes */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(244, 185, 66, 0.25);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(244, 185, 66, 0.4);
+}
