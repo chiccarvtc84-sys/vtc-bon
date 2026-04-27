@@ -5,11 +5,85 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
 ## [Unreleased]
 
-### À venir (Phase 6 — Capacitor mobile)
-- `npx cap init` + `npx cap add ios/android`
-- Permissions `Info.plist` + `AndroidManifest.xml` (micro, locale, caméra)
-- Génération assets via `capacitor-assets`
-- Build `.ipa` (Mac requis) + `.aab` signé Android
+### À venir (Phase 7-9 — soumission stores)
+- Build signé Android `.aab` (Android Studio + keystore)
+- Build iOS `.ipa` (Mac requis, Xcode Archive → TestFlight)
+- Screenshots pour App Store + Google Play
+- Descriptions + mots-clés ASO
+- Beta testing TestFlight + Internal Testing
+
+---
+
+## [0.6.0] — 2026-04-27
+
+### Ajouté
+
+#### Plateformes natives
+- **`npx cap add android`** : projet Android scaffolded dans `android/`
+  (Gradle + Java) avec bundle `com.trajetpro.app`.
+- **`npx cap add ios`** : projet Xcode scaffolded dans `ios/`
+  (Swift + Storyboards). Le `pod install` est skipped sur Windows,
+  à exécuter sur un Mac avant le premier build (voir `TODO_HUMAN.md`).
+- **`@capacitor/network`** activé : Wi-Fi / cellulaire / hors-ligne.
+- **`@capacitor/preferences`** activé : stockage natif chiffré (iOS Keychain
+  variant disponible) et `SharedPreferences` Android.
+
+#### Permissions natives
+- **Android (`AndroidManifest.xml`)** :
+  `INTERNET`, `ACCESS_NETWORK_STATE`, `RECORD_AUDIO`,
+  `MODIFY_AUDIO_SETTINGS`, `ACCESS_COARSE/FINE_LOCATION`,
+  `CAMERA`, `POST_NOTIFICATIONS`, `READ_MEDIA_IMAGES`.
+- **iOS (`Info.plist`)** : `NSMicrophoneUsageDescription`,
+  `NSSpeechRecognitionUsageDescription`,
+  `NSLocationWhenInUseUsageDescription`,
+  `NSCameraUsageDescription`, `NSPhotoLibraryAddUsageDescription`.
+  Schéma URL `trajetpro://` ajouté pour les deep links futurs.
+
+#### Assets visuels (placeholders)
+- `scripts/generate-assets.mjs` : génère `assets/icon.png` (1024×1024)
+  et `assets/splash.png` / `splash-dark.png` (2732×2732) à partir d'un
+  SVG inline aux couleurs de la marque (fond `#0B0B0D`, doré `#F4B942`,
+  voiture stylisée + wordmark Fraunces).
+- **`@capacitor/assets`** : génère 113 déclinaisons
+  (100 Android mipmap/drawable toutes densités + 13 iOS appiconset).
+- ⚠️ Ce sont des placeholders ; remplacer `assets/icon.png` et
+  `assets/splash.png` par les vrais visuels avant le build de production
+  puis `npm run assets`.
+
+#### Code React adaptations
+- **`src/lib/platform.js`** : helpers cross-platform
+  - `isNativePlatform()`, `platformName()` (web/ios/android)
+  - `watchNetwork(cb)` : `@capacitor/network` en natif, `navigator.onLine`
+    en web. `unsubscribe()` retourné.
+  - `preferencesGet/Set/Remove` : `@capacitor/preferences` en natif,
+    `localStorage` en web. Imports dynamiques pour éviter de bundler
+    les SDK Capacitor en build web.
+- **`App.jsx`** : badge rouge "Hors-ligne" en haut de l'app quand la
+  connexion tombe (visible sur l'auth + l'app principale).
+
+#### Scripts npm
+```json
+"assets": "node scripts/generate-assets.mjs && capacitor-assets generate --ios --android"
+"cap:sync": "npm run build && cap sync"
+"cap:android": "npm run cap:sync && cap open android"
+"cap:ios": "npm run cap:sync && cap open ios"
+"cap:run:android": "npm run cap:sync && cap run android"
+"cap:run:ios": "npm run cap:sync && cap run ios"
+```
+
+### Modifié
+- `package.json` deps : ajout `typescript@6` (capacitor.config.ts),
+  `sharp@0.34` et `@capacitor/assets@3` (devDeps).
+
+### Notes
+- Le bundle JS passe de 576 KB à 587 KB gzip 158 KB. Vite a auto-splité
+  un chunk `web-*.js` (1.2 KB) pour les imports natifs Capacitor —
+  ils ne sont chargés qu'en runtime mobile.
+- Le projet `ios/` est utilisable mais nécessite **un Mac avec Xcode 15+
+  et CocoaPods** pour : `cd ios/App && pod install` puis ouvrir
+  `App.xcworkspace`.
+- Le projet `android/` est buildable directement depuis Windows via
+  Android Studio.
 
 ---
 

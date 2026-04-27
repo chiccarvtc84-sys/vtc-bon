@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+        <string>TrajetPro</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+
+	<!-- Permissions iOS — chaque NSXxxUsageDescription est OBLIGATOIRE pour
+	     pouvoir publier sur l'App Store : Apple rejette toute app qui demande
+	     une permission sans expliquer pourquoi en français. -->
+
+	<!-- Microphone : dictée vocale pour créer un bon de course rapidement -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>TrajetPro a besoin du microphone pour la dictée vocale, qui permet de créer un bon de course en quelques secondes.</string>
+
+	<!-- Reconnaissance vocale : iOS sépare l'accès au micro et à la transcription -->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>TrajetPro utilise la reconnaissance vocale pour transcrire votre dictée et pré-remplir le formulaire de course.</string>
+
+	<!-- Localisation : pré-remplir les adresses de départ et historique des courses -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>TrajetPro utilise votre position pour pré-remplir l'adresse de départ et garder l'historique de vos courses.</string>
+
+	<!-- Caméra : scan de QR code de facture, optionnel -->
+	<key>NSCameraUsageDescription</key>
+	<string>TrajetPro accède à la caméra uniquement quand vous scannez un QR code de paiement ou de facture.</string>
+
+	<!-- Photothèque : sauvegarde des PDF de factures -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>TrajetPro peut enregistrer vos factures PDF dans votre photothèque si vous le demandez.</string>
+
+	<!-- Faux dispositif tactile (pour iPad multitasking) -->
+	<key>UIRequiresFullScreen</key>
+	<false/>
+
+	<!-- Schéma URL pour deep links (retour Stripe Checkout, parrainage) -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.trajetpro.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>trajetpro</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

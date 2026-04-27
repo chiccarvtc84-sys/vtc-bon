@@ -11,9 +11,12 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "cap:sync": "npm run build && npx cap sync",
-    "cap:ios": "npm run cap:sync && npx cap open ios",
-    "cap:android": "npm run cap:sync && npx cap open android"
+    "assets": "node scripts/generate-assets.mjs && capacitor-assets generate --ios --android",
+    "cap:sync": "npm run build && cap sync",
+    "cap:android": "npm run cap:sync && cap open android",
+    "cap:ios": "npm run cap:sync && cap open ios",
+    "cap:run:android": "npm run cap:sync && cap run android",
+    "cap:run:ios": "npm run cap:sync && cap run ios"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",
@@ -29,6 +32,7 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^7.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
@@ -36,6 +40,8 @@
     "eslint": "^9.16.0",
     "eslint-plugin-react": "^7.37.2",
     "eslint-plugin-react-hooks": "^5.1.0",
+    "sharp": "^0.34.5",
+    "typescript": "^6.0.3",
     "vite": "^6.0.5"
   }
 }

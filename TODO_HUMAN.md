@@ -99,7 +99,37 @@ pour rédiger les CGU.
 
 ---
 
-## 🟡 Pour la Phase 6 — Build mobile
+## 🟡 Pour la Phase 6 — Build mobile (côté code = ✅ fait, reste = setup matériel)
+
+### 4b. Remplacer les placeholders d'icône / splash
+J'ai généré `assets/icon.png` (1024×1024) et `assets/splash.png` (2732×2732)
+avec un SVG simple aux couleurs TrajetPro. C'est utilisable pour les bêtas
+internes mais pas pour les stores. Pour produire les vrais visuels :
+
+- **Option facile** : Figma / Canva, gabarit "App Icon" (1024×1024). Logo
+  centré avec safe area de 100px sur les bords. Export PNG.
+- **Option pro** : freelance Fiverr / 5euros (~30€).
+- **Option IA** : prompt Midjourney `"app icon, dark gold ##F4B942 luxury
+  car silhouette on black ##0B0B0D background, minimal, premium VTC,
+  square, no text, --ar 1:1"`.
+
+Une fois les fichiers prêts, place-les dans `assets/` et lance :
+```bash
+npm run assets
+```
+Cela régénérera les 113 déclinaisons (Android + iOS).
+
+### 4c. Tester le build Android (Windows OK)
+1. Installer **Android Studio** (~3 Go) : https://developer.android.com/studio
+2. Au premier lancement : SDK 34+, accepter les licences.
+3. Dans le projet :
+   ```bash
+   cd "C:\Users\zalin\Desktop\claude code\trajetpro"
+   npm run cap:android
+   ```
+   Cela ouvre le projet dans Android Studio.
+4. **Run** → choisir un émulateur Pixel 7 API 34 → l'app se lance.
+5. **Build > Generate Signed Bundle/APK** quand tu seras prêt à signer.
 
 ### 5. Compte Apple Developer
 **Pourquoi humain :** demande paiement annuel ($99) + vérification d'identité.

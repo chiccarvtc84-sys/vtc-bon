@@ -36,6 +36,7 @@ import {
   verifySiret as sbVerifySiret,
   isDisposableEmail as sbIsDisposableEmail,
 } from './lib/supabase.js';
+import { watchNetwork, isNativePlatform } from './lib/platform.js';
 
 /* -------------------------------------------------------------------------
    DATA MODEL / MOCK PROFILE (geo-aware: Avignon/Sorgues)
@@ -3424,6 +3425,22 @@ export default function App() {
   const [blockedAccountInfo, setBlockedAccountInfo] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [dataLoading, setDataLoading] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
+
+  // --- Détection réseau (Wi-Fi / cellulaire / hors-ligne) ---
+  // Branche @capacitor/network sur mobile, navigator.onLine en web.
+  // Affiche un badge "Hors-ligne" en haut quand la connexion tombe.
+  useEffect(() => {
+    let unsub = () => {};
+    let mounted = true;
+    watchNetwork((connected) => {
+      if (mounted) setIsOnline(connected);
+    }).then((u) => { if (mounted) unsub = u; else u(); });
+    return () => {
+      mounted = false;
+      unsub();
+    };
+  }, []);
 
   // --- App state ---
   const [tab, setTab] = useState("home");
@@ -3916,6 +3933,16 @@ export default function App() {
         <GlobalStyles/>
         <div className="tp-root">
           <div className="tp-phone">
+            {!isOnline && (
+              <div style={{
+                position: "absolute", top: 0, left: 0, right: 0, zIndex: 1200,
+                padding: "8px 14px", background: "rgba(248,113,113,0.95)",
+                color: "#0B0B0D", fontSize: 12, fontWeight: 700, textAlign: "center",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              }}>
+                <Cloud size={13}/> Hors-ligne — connexion requise pour s'identifier
+              </div>
+            )}
             <AuthScreens
               mode={authScreen}
               onChangeMode={setAuthScreen}
@@ -4004,6 +4031,16 @@ export default function App() {
       <GlobalStyles/>
       <div className="tp-root">
         <div className="tp-phone">
+          {!isOnline && (
+            <div style={{
+              position: "absolute", top: 0, left: 0, right: 0, zIndex: 1200,
+              padding: "8px 14px", background: "rgba(248,113,113,0.95)",
+              color: "#0B0B0D", fontSize: 12, fontWeight: 700, textAlign: "center",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            }}>
+              <Cloud size={13}/> Hors-ligne — vos modifications seront enregistrées au retour de la connexion
+            </div>
+          )}
           {screen}
           {showNav && (
             <BottomNav active={tab} onChange={setTab} onVoice={onOpenVoice}/>
