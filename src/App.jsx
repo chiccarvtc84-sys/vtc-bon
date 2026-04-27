@@ -31,6 +31,8 @@ import {
   purchaseTokensDev,
   findUserByReferralCode,
   creditReferralBonus,
+  createCheckoutSession,
+  findPurchaseBySessionId,
   verifySiret as sbVerifySiret,
   isDisposableEmail as sbIsDisposableEmail,
 } from './lib/supabase.js';
@@ -1536,27 +1538,38 @@ function PurchaseModal({ open, onClose, onConfirm }) {
     }
   }, [open]);
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     setLoading(true);
-    setTimeout(() => {
-      const purchase = {
-        id: genId(),
-        invoiceNumber: `TRP-2026-${String(Math.floor(Math.random() * 9000) + 1000)}`,
-        date: new Date().toISOString().slice(0,10),
-        package: pack.label,
-        tokens: pack.tokens,
-        priceTTC: finalPrice,
-        priceHT: priceHT,
-        vatAmount: applyReverseCharge ? 0 : vatAmount,
-        vatApplied: !applyReverseCharge,
-        vatIntra: showVatField ? vatIntra.toUpperCase() : "",
-        paymentMethod: paymentMethod === "card" ? "Carte bancaire" : paymentMethod === "applepay" ? "Apple Pay" : "Google Pay",
-      };
-      setResult(purchase);
+    // On déclare l'objet purchase pour le mode invité (et comme fallback UI).
+    const purchase = {
+      id: genId(),
+      packageId: pack.id,
+      invoiceNumber: `TRP-2026-${String(Math.floor(Math.random() * 9000) + 1000)}`,
+      date: new Date().toISOString().slice(0, 10),
+      package: pack.label,
+      tokens: pack.tokens,
+      priceTTC: finalPrice,
+      priceHT: priceHT,
+      vatAmount: applyReverseCharge ? 0 : vatAmount,
+      vatApplied: !applyReverseCharge,
+      vatIntra: showVatField ? vatIntra.toUpperCase() : "",
+      paymentMethod:
+        paymentMethod === "card" ? "Carte bancaire" :
+        paymentMethod === "applepay" ? "Apple Pay" : "Google Pay",
+    };
+
+    try {
+      // onConfirm peut être asynchrone (mode connecté → Stripe Checkout redirect).
+      // S'il déclenche un window.location.assign, le code ci-dessous ne s'exécutera pas.
+      const result = await Promise.resolve(onConfirm(purchase));
+      // Mode invité ou retour synchrone : on affiche le succès en local.
+      setResult(result || purchase);
       setLoading(false);
       setStep("success");
-      onConfirm(purchase);
-    }, 1400);
+    } catch (err) {
+      setLoading(false);
+      alert(`Paiement impossible : ${err?.message || err}`);
+    }
   };
 
   if (!open) return null;
@@ -3512,6 +3525,58 @@ export default function App() {
     }
   };
 
+  // --- Gestion du retour Stripe Checkout (?purchase=success / ?purchase=cancel) ---
+  // Lit l'URL au mount pour détecter le retour depuis Stripe, déclenche un
+  // refresh des tokens (le webhook a quelques secondes pour traiter), affiche
+  // un toast de succès, puis nettoie le query param.
+  const handleCheckoutReturn = async (authUserId) => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const purchaseFlag = params.get('purchase');
+    if (!purchaseFlag) return;
+
+    // Nettoyer l'URL tout de suite pour éviter qu'un reload ne re-déclenche
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState({}, '', cleanUrl);
+
+    if (purchaseFlag === 'cancel') {
+      console.log('Paiement annulé par l\'utilisateur');
+      // On ne fait rien d'autre : la PurchaseModal est fermée, on reste sur l'accueil.
+      return;
+    }
+
+    if (purchaseFlag === 'success' && authUserId) {
+      // Le webhook côté serveur peut prendre 1-3 secondes. On poll jusqu'à
+      // ce que la transaction apparaisse, max 10 secondes.
+      const sessionId = params.get('session_id');
+      let purchaseTx = null;
+      for (let i = 0; i < 10 && !purchaseTx; i++) {
+        purchaseTx = await findPurchaseBySessionId(authUserId, sessionId);
+        if (!purchaseTx) await new Promise(r => setTimeout(r, 1000));
+      }
+      // Refresh complet (solde + historique + factures pour avoir la nouvelle TRP-…)
+      const [{ data: profile }, txs, invoiceRows] = await Promise.all([
+        supabase.from('users').select('token_balance').eq('id', authUserId).single(),
+        sbLoadTokenTransactions(authUserId).catch(() => []),
+        sbLoadInvoices(authUserId).catch(() => []),
+      ]);
+      if (profile) setTokenBalance(profile.token_balance || 0);
+      setTokenHistory(txs.map(tokenTxFromDb).filter(Boolean));
+      setInvoices(invoiceRows.map(invoiceFromDb).filter(Boolean));
+      // Petit toast simple via alert pour l'instant (à remplacer par un vrai toast UI plus tard)
+      if (purchaseTx) {
+        setTimeout(() => {
+          alert(`✅ Paiement confirmé. ${purchaseTx.tokens_delta} crédits ajoutés à votre compte.`);
+        }, 200);
+      } else {
+        // Le webhook n'a pas encore tourné — on prévient l'user
+        setTimeout(() => {
+          alert('Paiement reçu. Vos crédits arrivent dans quelques secondes (rafraîchissez si besoin).');
+        }, 200);
+      }
+    }
+  };
+
   // --- Auth state listener : se synchronise avec Supabase au mount + sur changements ---
   useEffect(() => {
     let mounted = true;
@@ -3524,6 +3589,8 @@ export default function App() {
           setAuthScreen(null);
           setIsGuest(false);
           await loadUserData(session.user.id);
+          // Si on revient de Stripe Checkout, gérer le retour
+          await handleCheckoutReturn(session.user.id);
         }
         setAuthChecked(true);
       }
@@ -3536,6 +3603,7 @@ export default function App() {
         setAuthScreen(null);
         setIsGuest(false);
         await loadUserData(session.user.id);
+        await handleCheckoutReturn(session.user.id);
         setTab("home");
       } else if (event === 'SIGNED_OUT') {
         setCurrentUser(null);
@@ -3773,25 +3841,28 @@ export default function App() {
   };
 
   const onPurchaseConfirm = async (purchase) => {
-    // En mode invité : pas de persistance, on simule
+    // Mode invité : pas de Supabase, on simule l'achat en mémoire.
     if (isGuest || !currentUser?.id) {
       setTokenBalance(t => t + purchase.tokens);
       setTokenHistory(prev => [purchase, ...prev]);
-      return;
+      return purchase;
     }
 
-    // En dev : on enregistre via la RPC credit_token_purchase (pas de Stripe)
-    // En prod (Phase 5) : ce flow sera remplacé par Stripe Checkout + webhook
-    try {
-      await purchaseTokensDev(currentUser.id, {
-        packageId: purchase.packageId || purchase.package || 'pack_unknown',
-        tokens: purchase.tokens,
-        priceTTC: purchase.priceTTC || 0,
-      });
-      await refreshTokens();
-    } catch (err) {
-      alert(`Erreur lors de l'achat : ${err?.message || err}`);
-    }
+    // Mode connecté : redirection vers Stripe Checkout.
+    // Le webhook stripe-webhook reçoit checkout.session.completed → crédite
+    // les tokens et génère la facture. Au retour sur l'app (success_url),
+    // le useEffect ci-dessous détecte ?purchase=success et rafraîchit les tokens.
+    const packageId = purchase.packageId || purchase.package_id;
+    if (!packageId) throw new Error("Pack inconnu (packageId manquant)");
+
+    const { url } = await createCheckoutSession(packageId);
+    if (!url) throw new Error("URL Stripe manquante");
+
+    // Redirection — la suite du code ne s'exécute pas (le navigateur quitte la page).
+    window.location.assign(url);
+    // Promise non résolue : Stripe Checkout est ouvert, l'app va revenir via
+    // success_url ou cancel_url. On laisse le loading actif sur la modale.
+    return new Promise(() => { /* never resolves */ });
   };
 
   const onInsufficientBuy = () => {

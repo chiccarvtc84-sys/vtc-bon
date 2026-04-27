@@ -5,11 +5,74 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
 ## [Unreleased]
 
-### À venir (Phase 5 — Stripe)
-- Edge Functions `create-payment-intent` et `stripe-webhook`
-- 4 produits Stripe (pack20 / pack40 / pack50 / pack80)
-- Branchement `PurchaseModal` sur Stripe Checkout (hosted)
-- Génération de la facture côté serveur (numéro `TRP-2026-XXXX`, empreinte fiscale)
+### À venir (Phase 6 — Capacitor mobile)
+- `npx cap init` + `npx cap add ios/android`
+- Permissions `Info.plist` + `AndroidManifest.xml` (micro, locale, caméra)
+- Génération assets via `capacitor-assets`
+- Build `.ipa` (Mac requis) + `.aab` signé Android
+
+---
+
+## [0.5.0] — 2026-04-27
+
+### Ajouté
+
+#### Côté Stripe (test mode)
+- 4 produits + 4 prix Stripe créés (compte `acct_1TPbCvGYVtGQnVrZ`) :
+  - `pack20` (Pack Découverte, 20 crédits, 2.00€) — `price_1TQuQWGYVtGQnVrZcnvDfEMJ`
+  - `pack40` (Pack Essentiel, 40 crédits, 3.50€) — `price_1TQuQZGYVtGQnVrZO9EFBOg3`
+  - `pack50` (Pack Confort, 50 crédits, 4.00€) — `price_1TQuQcGYVtGQnVrZbp1H0jyi`
+  - `pack80` (Pack Pro, 80 crédits, 5.00€) — `price_1TQuQfGYVtGQnVrZzc62g6OX`
+- Webhook Stripe créé : `we_1TQuUgGYVtGQnVrZ0vtAsKgn` → écoute
+  `checkout.session.completed` + `payment_intent.payment_failed`,
+  pointe sur `https://olmhckwethdcxhvsrfie.supabase.co/functions/v1/stripe-webhook`.
+
+#### Côté Supabase Edge Functions
+- **`create-checkout-session`** (JWT requis) : crée une session Stripe Checkout
+  avec le `price_id` figé serveur (catalogue dans la fonction). Retourne
+  `{ sessionId, url }` ; le client redirige vers `url`. Métadonnées
+  `user_id`, `package_id`, `tokens`, `pack_label` injectées pour le webhook.
+- **`stripe-webhook`** (no JWT, signature vérifiée) : sur
+  `checkout.session.completed`, appelle la RPC `credit_token_purchase`
+  (idempotente — anti double crédit grâce au `stripe_payment_intent_id`),
+  génère une facture conforme CGI (numéro chronologique `TRP-YYYY-XXXX`,
+  TVA 20%, empreinte fiscale SHA-256, QR code, `status='paid'`), et
+  backfill `invoice_number` dans `token_transactions`.
+- **3 secrets déposés** via `supabase secrets set` :
+  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SITE_URL`.
+
+#### Côté React (`src/lib/supabase.js`)
+- `createCheckoutSession(packageId)` — wrapper `functions.invoke`.
+- `findPurchaseBySessionId(userId, sessionId)` — recherche la transaction
+  d'achat la plus récente (utilisé sur la page de retour).
+- `purchaseTokensDev` conservé pour le mode invité.
+
+#### Côté React (`src/App.jsx`)
+- `onPurchaseConfirm` (mode connecté) : crée la session Checkout puis
+  `window.location.assign(url)` → redirection vers la page Stripe hosted
+  en français (`locale: "fr"`).
+- `onPurchaseConfirm` (mode invité) : reste local en mémoire.
+- `handleCheckoutReturn(authUserId)` : détecte `?purchase=success` ou
+  `?purchase=cancel` au mount + sur `SIGNED_IN`, poll jusqu'à 10s la
+  transaction d'achat (le webhook met 1-3s), refresh
+  solde/historique/factures, affiche un toast.
+- `PurchaseModal.handleConfirm` rendu async, gère le rejet propre du
+  `onConfirm` qui ne retourne jamais (cas redirection).
+
+### Modifié
+- `package.json` : `@stripe/stripe-js` déjà dans les deps depuis Phase 1
+  (utile uniquement si on remet Stripe Elements plus tard ; Checkout hosted
+  ne le nécessite pas).
+- `.env` : `VITE_STRIPE_PUBLIC_KEY` rempli avec la clé fournie (⚠️ suite
+  de `z` à la fin — à vérifier côté user, voir `TODO_HUMAN.md`).
+
+### Notes
+- La TVA est fixée à 20% côté webhook (prestation de service numérique B2C).
+  Pour un client UE B2B avec n° TVA intracommunautaire valide, il faudra
+  passer par `vat_reverse_charge=true` et HT — à implémenter en Phase 5.1.
+- L'empreinte fiscale (`fingerprint`) est SHA-256 sur
+  `invoice_number|user_id|package_id|amount_ttc|payment_intent_id|issued_at`.
+  Le `qr_code_data` contient `INV:…|TTC:…|VAT:…|FP:…16` pour scan rapide.
 
 ---
 

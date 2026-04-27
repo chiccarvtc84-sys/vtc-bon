@@ -152,23 +152,56 @@ React: PurchaseModal → onConfirm
                   └── 🪝 trg_sync_token_balance
 ```
 
-### Mode prod (Phase 5 — Stripe Checkout)
+### Mode prod (Stripe Checkout — implémenté en Phase 5)
 ```
-React: PurchaseModal → onConfirm
-  └── Edge Function create-payment-intent (Phase 5)
-      ├── stripe.checkout.sessions.create({ price, success_url, cancel_url })
-      └── Retour : URL hosted Stripe Checkout
-React: window.location = checkoutUrl
-  └── User paie sur stripe.com
-  └── Stripe → success_url → /tokens?session_id=…
+React: PurchaseModal.handleConfirm
+  └── App.onPurchaseConfirm
+      └── createCheckoutSession(packageId)  ← src/lib/supabase.js
+          └── Edge Function create-checkout-session (JWT requis)
+              ├── Auth: extract user.id du JWT Supabase
+              ├── Lookup price_id depuis catalogue figé serveur
+              ├── stripe.checkout.sessions.create({
+              │     mode: "payment", line_items: [{ price, quantity:1 }],
+              │     success_url, cancel_url, locale: "fr",
+              │     metadata: { user_id, package_id, tokens, pack_label }
+              │   })
+              └── Retour: { sessionId, url }
+      └── window.location.assign(url)
+React: User paie sur checkout.stripe.com (page hosted FR)
+  └── Stripe redirige vers SITE_URL/?purchase=success&session_id=…
+React: handleCheckoutReturn (au mount)
+  ├── Detect ?purchase=success
+  ├── Poll findPurchaseBySessionId (max 10s, le webhook a 1-3s)
+  ├── Refresh balance + token_transactions + invoices
+  └── Toast "✅ Paiement confirmé. N crédits ajoutés"
 
-Stripe → POST /functions/v1/stripe-webhook (signé)
-  └── stripe.webhooks.constructEvent(body, sig, secret)
-  └── checkout.session.completed
-      └── RPC credit_token_purchase
-          └── INSERT token_transactions (purchase, +N, real intent_id)
-      └── INSERT invoices (numéro TRP-2026-XXXX, fingerprint, QR code)
+(En parallèle) Stripe → POST /functions/v1/stripe-webhook
+  └── stripe.webhooks.constructEventAsync(body, sig, STRIPE_WEBHOOK_SECRET)
+  └── Si checkout.session.completed:
+      ├── RPC credit_token_purchase (idempotent via stripe_payment_intent_id)
+      │   └── INSERT token_transactions (purchase, +N tokens)
+      │       └── trg_sync_token_balance → users.token_balance += N
+      └── INSERT invoices (
+            invoice_number = TRP-YYYY-XXXX (chronologique sans rupture),
+            amount_ht/vat/ttc, vat_rate=20, status='paid',
+            fingerprint=SHA-256(num|user|pack|amount|intent|issued_at),
+            qr_code_data=INV:…|TTC:…|VAT:…|FP:…16
+          )
+      └── UPDATE token_transactions SET invoice_number = TRP-…
+            WHERE stripe_payment_intent_id = intent_id
 ```
+
+### Edge Functions déployées
+- `verify-siret` (Phase 3) — no JWT, lookup INSEE
+- `create-checkout-session` (Phase 5) — JWT requis, crée session Stripe
+- `stripe-webhook` (Phase 5) — no JWT, signature vérifiée
+
+### Secrets Supabase Edge Functions (déposés via `supabase secrets set`)
+- `STRIPE_SECRET_KEY` — clé secrète Stripe (sk_test_… ou sk_live_…)
+- `STRIPE_WEBHOOK_SECRET` — signing secret du webhook
+- `SITE_URL` — URL de retour après paiement (http://localhost:5173 en dev)
+- + les 5 built-in : `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
+  `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWKS`, `SUPABASE_DB_URL`
 
 ## Flow de création d'un bon de course
 

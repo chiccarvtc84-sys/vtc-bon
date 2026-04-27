@@ -287,9 +287,51 @@ export async function loadTokenTransactions(userId) {
 }
 
 /**
+ * Crée une session Stripe Checkout pour acheter un pack de crédits.
+ * Appelle l'Edge Function `create-checkout-session` (JWT requis).
+ * Retourne `{ sessionId, url }` ; le caller redirige vers `url`.
+ */
+export async function createCheckoutSession(packageId) {
+  const { data, error } = await supabase.functions.invoke('create-checkout-session', {
+    body: { packageId },
+  });
+  if (error) {
+    // Supabase functions.invoke renvoie une erreur sans body JSON parsé.
+    // On essaye de récupérer le détail dans error.context si possible.
+    const detail = error?.context?.body || error?.message || 'Erreur Stripe';
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+  }
+  if (!data?.url) {
+    throw new Error("Réponse Stripe invalide (pas d'URL Checkout)");
+  }
+  return data;
+}
+
+/**
+ * Récupère une transaction d'achat à partir d'un session_id Stripe Checkout.
+ * Utilisé sur la page de retour pour vérifier que le webhook a bien crédité.
+ */
+export async function findPurchaseBySessionId(userId, sessionId) {
+  if (!userId || !sessionId) return null;
+  // On stocke le payment_intent_id (pas le session_id) — il faut donc passer
+  // par le metadata de la session. Plus simple : on regarde si une transaction
+  // de type 'purchase' a été créée dans les 5 dernières minutes.
+  const { data } = await supabase
+    .from('token_transactions')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('kind', 'purchase')
+    .gte('created_at', new Date(Date.now() - 5 * 60 * 1000).toISOString())
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data;
+}
+
+/**
  * MODE DEV : achat de tokens sans Stripe.
  * Crée une transaction de type 'purchase' qui crédite le solde via le trigger.
- * En production (Phase 5), ce flow passera par l'Edge Function stripe-webhook.
+ * Conservé pour le mode invité ou pour les tests sans paiement réel.
  */
 export async function purchaseTokensDev(userId, { packageId, tokens, priceTTC }) {
   // ID factice pour respecter la contrainte unique stripe_payment_intent_id en dev

@@ -49,21 +49,41 @@ sans un user authentifié.
 
 ---
 
-## 🟠 Pour la Phase 5 — Stripe (avant que je puisse continuer)
+## 🟠 Pour tester la Phase 5 — Stripe Checkout
 
-### 3. Compte Stripe + clés API
-**Pourquoi humain :** créer un compte Stripe demande une vérification d'identité.
+### 3a. Vérifier la clé publique Stripe (✅ résolu : compte créé, fonctions déployées)
+La clé publique stockée dans `.env` (`VITE_STRIPE_PUBLIC_KEY`) se termine par
+une suite de `z` qui ressemble à un placeholder Dashboard. **Recopie la vraie
+clé** depuis Stripe Dashboard → Developers → API keys → Publishable key.
+Pas bloquant pour Stripe Checkout (qui n'utilise que la clé secrète côté
+serveur), mais à corriger avant toute migration vers Stripe Elements.
 
-**Étapes :**
-1. https://dashboard.stripe.com/register → créer compte (mode Test pour dev).
-2. Récupérer :
-   - **Clé publique test** (`pk_test_…`) → à mettre dans `.env` :
-     `VITE_STRIPE_PUBLIC_KEY=pk_test_…`
-   - **Clé secrète test** (`sk_test_…`) → ne **pas** mettre dans `.env`,
-     me la donner et je la déposerai dans les secrets Supabase via
-     `mcp__…__deploy_edge_function` ou via le Dashboard.
-3. (À la fin de la Phase 5) **Webhook signing secret** (`whsec_…`) — généré
-   après la création du webhook dans le Dashboard Stripe. Idem secrets Supabase.
+### 3b. Tester un achat de pack (test mode)
+1. Lance `npm --prefix trajetpro run dev` et connecte-toi avec un user
+   confirmé (Phase 4 § 1).
+2. Va sur l'onglet Profil/Tokens, clique "Recharger mes crédits".
+3. Choisis un pack, clique "Continuer" puis "Confirmer".
+4. Tu es redirigé vers Stripe Checkout. **Carte test : `4242 4242 4242 4242`**,
+   date `12/34`, CVC `123`, code postal `75001`.
+5. Validation → retour sur l'app avec `?purchase=success`.
+6. **Vérifications :**
+   - [ ] Solde tokens augmenté du bon nombre.
+   - [ ] Une nouvelle facture `TRP-2026-0001` est apparue dans Factures.
+   - [ ] Dans Supabase Table Editor → `token_transactions` : ligne
+         `kind='purchase'` avec `stripe_payment_intent_id` rempli.
+   - [ ] Dans `invoices` : ligne avec `status='paid'`, `payment_method='card'`,
+         `fingerprint` SHA-256 (64 chars), `qr_code_data` rempli.
+7. **Cartes test pour autres scénarios :**
+   - `4000 0027 6000 3184` → 3D Secure (test du flow d'authentification).
+   - `4000 0000 0000 9995` → fonds insuffisants (paiement refusé).
+
+### 3c. Modifier `SITE_URL` quand tu déploieras en prod
+Pour l'instant `SITE_URL=http://localhost:5173` dans les secrets Supabase.
+Quand tu auras une URL publique (Vercel/Netlify/domaine perso), il faudra
+mettre à jour ce secret :
+```
+supabase secrets set --project-ref olmhckwethdcxhvsrfie SITE_URL=https://app.trajetpro.fr
+```
 
 ### 4. Choix d'une politique de remboursement
 **Pourquoi humain :** décision business.
