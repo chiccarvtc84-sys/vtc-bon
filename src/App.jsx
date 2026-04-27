@@ -3474,9 +3474,11 @@ export default function App() {
       }
       const profile = profileFromDb(profileRow);
 
-      // Crédit du bonus de parrainage si c'est la 1re connexion d'un filleul
-      // (referred_by rempli mais aucune transaction referral_bonus reçue)
-      if (profile.referredBy) {
+      // Crédit du bonus de parrainage si c'est la 1re connexion d'un filleul.
+      // `profile.referredBy` est l'UUID du parrain (resolu côté trigger SQL
+      // à partir du code saisi). On crédite si ce filleul n'a pas encore reçu
+      // de transaction `referral_bonus`.
+      if (profile.referredBy && profile.referredBy !== authUserId) {
         const { data: existing } = await supabase
           .from('token_transactions')
           .select('id')
@@ -3484,13 +3486,10 @@ export default function App() {
           .eq('kind', 'referral_bonus')
           .limit(1);
         if (!existing || existing.length === 0) {
-          const referrer = await findUserByReferralCode(profile.referredBy);
-          if (referrer && referrer.id !== authUserId) {
-            try {
-              await creditReferralBonus(referrer.id, authUserId);
-            } catch (e) {
-              console.warn("Crédit parrainage échoué :", e?.message);
-            }
+          try {
+            await creditReferralBonus(profile.referredBy, authUserId);
+          } catch (e) {
+            console.warn("Crédit parrainage échoué :", e?.message);
           }
         }
       }
