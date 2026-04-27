@@ -2437,11 +2437,14 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
     return /^\d{14}$/.test(clean);
   };
 
-  // Validation téléphone français (facultatif maintenant, juste pour les factures)
+  // Validation téléphone français (facultatif — utilisé pour les factures).
+  // Accepte tous les séparateurs courants (espaces, points, tirets,
+  // parenthèses, slashes) et les préfixes +33, 0033 ou 0.
   const isValidPhone = (phone) => {
     if (!phone) return true; // Facultatif
-    const clean = phone.replace(/[\s.-]/g, "");
-    return /^(?:\+33|0)[1-9]\d{8}$/.test(clean);
+    // On garde uniquement les chiffres et le "+" en tête
+    const clean = phone.replace(/[^\d+]/g, "");
+    return /^(?:\+33|0033|0)[1-9]\d{8}$/.test(clean);
   };
 
   const handleInitialSubmit = async () => {
@@ -3655,21 +3658,45 @@ export default function App() {
       setAuthScreen("signup");
       return;
     }
-    if (!confirm("Vous déconnecter ? Vos données sont sauvegardées dans le cloud, vous pourrez les retrouver en vous reconnectant.")) return;
+
+    // Confirmation : window.confirm peut être bloqué dans certains contextes
+    // (iframe, webview, Capacitor). On utilise un try/catch défensif et on
+    // continue en cas d'échec (l'utilisateur a cliqué le bouton "Déconnexion",
+    // l'intention est claire).
+    try {
+      const ok = window.confirm(
+        "Vous déconnecter ? Vos données sont sauvegardées dans le cloud, " +
+        "vous pourrez les retrouver en vous reconnectant."
+      );
+      if (ok === false) return;
+    } catch (_) {
+      // confirm() indisponible → on continue quand même
+    }
+
+    // RESET IMMÉDIAT du state — on ne dépend pas de onAuthStateChange pour
+    // l'UI. Si Supabase met du temps à propager, l'utilisateur voit déjà
+    // l'écran de welcome.
+    setCurrentUser(null);
+    setIsGuest(false);
+    setBookings([]);
+    setInvoices([]);
+    setTokenBalance(0);
+    setTokenHistory([]);
+    setDetailBooking(null);
+    setDetailInvoice(null);
+    setPurchaseOpen(false);
+    setFormOpen(false);
+    setVoiceOpen(false);
+    setTab("home");
+    setAuthScreen("welcome");
+
+    // Puis on demande à Supabase de fermer la session côté serveur.
+    // Si ça échoue (offline par ex.), l'utilisateur est quand même déconnecté
+    // localement ; au prochain reload la session sera nettoyée.
     try {
       await sbSignOut();
-      // onAuthStateChange('SIGNED_OUT') va nettoyer le state et rediriger
     } catch (err) {
-      console.error("Erreur déconnexion :", err);
-      // Fallback : reset manuel
-      setCurrentUser(null);
-      setIsGuest(false);
-      setAuthScreen("welcome");
-      setTokenBalance(0);
-      setTokenHistory([]);
-      setBookings([]);
-      setInvoices([]);
-      setTab("home");
+      console.warn("signOut() Supabase a échoué (déconnexion locale OK) :", err?.message);
     }
   };
 
