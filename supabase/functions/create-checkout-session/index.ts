@@ -18,12 +18,30 @@
 import Stripe from "https://esm.sh/stripe@17.5.0?target=deno";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+// Origines explicitement autorisées. SITE_URL = origine de la PWA en prod,
+// localhost:5173/5174 = dev Vite, capacitor:// + ionic:// = WebView Capacitor
+// (iOS et Android utilisent ces schémas pour l'origin du WebView).
+function buildCorsHeaders(reqOrigin: string | null): Record<string, string> {
+  const siteUrl = (Deno.env.get("SITE_URL") || "").replace(/\/$/, "");
+  const allowed = new Set<string>([
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "capacitor://localhost",
+    "ionic://localhost",
+    "https://localhost",
+  ]);
+  if (siteUrl) allowed.add(siteUrl);
+
+  const origin = reqOrigin && allowed.has(reqOrigin) ? reqOrigin : (siteUrl || "");
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Headers":
+      "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Max-Age": "3600",
+    "Vary": "Origin",
+  };
+}
 
 // Catalogue figé côté serveur — la source de vérité pour les prix.
 // Doit rester synchronisé avec TOKEN_PACKAGES côté React.
@@ -57,54 +75,97 @@ const PACKAGES: Record<
   },
 };
 
+// Rate limit en mémoire (best-effort, suffisant pour bloquer un abus basique).
+// Les Edge Functions Supabase peuvent recycler les workers, donc ce n'est pas
+// une garantie absolue, mais ça calme un bot qui martèle l'endpoint.
+const RATE_LIMIT_WINDOW_MS = 60_000;     // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 10;       // 10 sessions Checkout / user / minute
+const recentCalls = new Map<string, number[]>();
+
+function isRateLimited(userId: string): boolean {
+  const now = Date.now();
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  const calls = (recentCalls.get(userId) || []).filter((t) => t > cutoff);
+  calls.push(now);
+  recentCalls.set(userId, calls);
+  // Best-effort cleanup pour éviter une fuite mémoire
+  if (recentCalls.size > 1000) {
+    for (const [k, v] of recentCalls) {
+      if (v[v.length - 1] < cutoff) recentCalls.delete(k);
+    }
+  }
+  return calls.length > RATE_LIMIT_MAX_REQUESTS;
+}
+
 Deno.serve(async (req: Request) => {
+  const cors = buildCorsHeaders(req.headers.get("Origin"));
+
   // Préflight CORS
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response("ok", { headers: cors });
   }
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...cors, "Content-Type": "application/json" },
     });
   }
+
+  const json = (body: unknown, status: number) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { ...cors, "Content-Type": "application/json" },
+    });
 
   try {
     const stripeKey = Deno.env.get("STRIPE_SECRET_KEY");
     if (!stripeKey) {
-      return jsonError("Stripe non configuré (STRIPE_SECRET_KEY manquant)", 500);
+      return json({ error: "Stripe non configuré (STRIPE_SECRET_KEY manquant)" }, 500);
     }
     const siteUrl = Deno.env.get("SITE_URL") || "http://localhost:5173";
 
     // Identité utilisateur via le JWT Supabase
     const authHeader = req.headers.get("Authorization") ?? "";
     if (!authHeader.startsWith("Bearer ")) {
-      return jsonError("Token manquant", 401);
+      return json({ error: "Token manquant" }, 401);
     }
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: authHeader } } }
+      { global: { headers: { Authorization: authHeader } } },
     );
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) {
-      return jsonError("Utilisateur non authentifié", 401);
+      return json({ error: "Utilisateur non authentifié" }, 401);
     }
 
-    // Lire le packageId envoyé
+    if (isRateLimited(user.id)) {
+      return json({ error: "Trop de requêtes. Réessayez dans une minute." }, 429);
+    }
+
+    // Lire et valider strictement le packageId
     const body = await req.json().catch(() => ({}));
-    const packageId = String(body?.packageId ?? "");
+    const rawPackageId = body?.packageId;
+    if (typeof rawPackageId !== "string" || rawPackageId.length > 32) {
+      return json({ error: "packageId invalide" }, 400);
+    }
+    const packageId = rawPackageId;
     const pack = PACKAGES[packageId];
     if (!pack) {
-      return jsonError(`Pack inconnu : ${packageId}`, 400);
+      return json({ error: `Pack inconnu : ${packageId}` }, 400);
     }
 
     // Profil utilisateur (pour pré-remplir l'email Stripe)
     const { data: profile } = await supabase
       .from("users")
-      .select("email, name")
+      .select("email, name, flagged")
       .eq("id", user.id)
       .single();
+
+    // Refus des comptes flagués (anti-fraude)
+    if (profile?.flagged) {
+      return json({ error: "Compte temporairement suspendu" }, 403);
+    }
 
     const stripe = new Stripe(stripeKey, { apiVersion: "2024-06-20" });
 
@@ -128,25 +189,13 @@ Deno.serve(async (req: Request) => {
       allow_promotion_codes: false,
     });
 
-    return new Response(
-      JSON.stringify({ sessionId: session.id, url: session.url }),
-      {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      },
-    );
+    return json({ sessionId: session.id, url: session.url }, 200);
   } catch (err) {
+    // Ne pas exposer les détails internes d'erreur côté client
     console.error("create-checkout-session error:", err);
-    return jsonError(
-      err instanceof Error ? err.message : "Erreur interne",
-      500,
+    return new Response(
+      JSON.stringify({ error: "Erreur interne lors de la création du paiement" }),
+      { status: 500, headers: { ...cors, "Content-Type": "application/json" } },
     );
   }
 });
-
-function jsonError(message: string, status: number) {
-  return new Response(JSON.stringify({ error: message }), {
-    status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
-}

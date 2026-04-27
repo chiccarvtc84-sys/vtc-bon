@@ -5,6 +5,20 @@ toi-même. Chaque entrée a une **priorité** et un **lien** vers le contexte.
 
 ---
 
+## 🔐 Sécurité (5 min, à faire maintenant)
+
+### S-1 — Activer "Leaked Password Protection" sur Supabase Auth
+**Pourquoi humain :** réglage du Dashboard Supabase, pas accessible via API/MCP.
+
+1. Va sur https://supabase.com/dashboard/project/olmhckwethdcxhvsrfie/auth/providers
+2. Section **Email** → toggle **"Leaked password protection"** sur ON
+3. (Optionnel mais recommandé) **"Password requirements"** → niveau **"Stronger"**
+
+Sans cette option, un utilisateur peut s'inscrire avec un mot de passe figurant
+dans les bases de fuites HaveIBeenPwned. Voir `docs/SECURITY_AUDIT.md` § H-11.
+
+---
+
 ## 🔴 Bloquants pour tester la Phase 4
 
 ### 1. Tester le flow signup → confirmation email → login
