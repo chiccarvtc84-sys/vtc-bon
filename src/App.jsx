@@ -39,6 +39,12 @@ import {
 import { watchNetwork, isNativePlatform } from './lib/platform.js';
 import { checkPasswordStrength, isPasswordPwned } from './lib/passwordSecurity.js';
 import { parseVoiceCommand as parseVoiceCommandV2 } from './lib/voiceParser.js';
+import {
+  ensureNotificationPermission,
+  scheduleBookingReminders,
+  cancelBookingReminders,
+  rescheduleAllBookings,
+} from './lib/notifications.js';
 
 /* -------------------------------------------------------------------------
    DATA MODEL / MOCK PROFILE (geo-aware: Avignon/Sorgues)
@@ -3678,6 +3684,20 @@ export default function App() {
 
   const isAuthenticated = !!currentUser || isGuest;
 
+  // --- Préférence "Rappel de courses" : si désactivée → annule tout,
+  //     si réactivée → replanifie tout. Se déclenche aussi quand `bookings`
+  //     change après login pour synchroniser la 1re fois.
+  useEffect(() => {
+    if (!isAuthenticated || isGuest) return;
+    const upcoming = bookings.filter((b) => {
+      const t = new Date(b.dateTime);
+      return t.getTime() > Date.now() && b.status !== 'cancelled' && b.status !== 'completed';
+    });
+    rescheduleAllBookings(upcoming, { enabled: !!preferences.notifRides })
+      .catch((e) => console.warn('reschedule on prefs change:', e?.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preferences.notifRides]);
+
   // --- Chargement des données utilisateur depuis Supabase ---
   // Appelé après login (ou au reload si la session existait déjà).
   // Charge profil + bookings + invoices + token_transactions.
@@ -3746,11 +3766,32 @@ export default function App() {
         sbLoadTokenTransactions(authUserId).catch(() => []),
       ]);
 
+      const formattedBookings = bookingRows.map(bookingFromDb).filter(Boolean);
       setCurrentUser(finalProfile);
-      setBookings(bookingRows.map(bookingFromDb).filter(Boolean));
+      setBookings(formattedBookings);
       setInvoices(invoiceRows.map(invoiceFromDb).filter(Boolean));
       setTokenBalance(finalProfile.tokenBalance);
       setTokenHistory(tokenRows.map(tokenTxFromDb).filter(Boolean));
+
+      // Re-synchronise les notifications de rappel pour TOUS les bons à venir.
+      // Au cas où l'utilisateur a réinstallé l'app, changé de device, ou que
+      // les timers web ont été perdus à cause d'un reload.
+      try {
+        if (preferences.notifRides) {
+          const granted = await ensureNotificationPermission();
+          if (granted) {
+            await rescheduleAllBookings(
+              formattedBookings.filter((b) => {
+                const t = new Date(b.dateTime);
+                return t.getTime() > Date.now() && b.status !== 'cancelled' && b.status !== 'completed';
+              }),
+              { enabled: true },
+            );
+          }
+        }
+      } catch (e) {
+        console.warn('Resync notifications échoué :', e?.message);
+      }
     } catch (err) {
       console.error("Erreur chargement données :", err);
     } finally {
@@ -3920,6 +3961,10 @@ export default function App() {
     setTab("home");
     setAuthScreen("welcome");
 
+    // Annule TOUS les rappels de course en attente (sinon ils continueraient
+    // à s'afficher pour un compte déconnecté).
+    rescheduleAllBookings([], { enabled: false }).catch(() => {});
+
     // Puis on demande à Supabase de fermer la session côté serveur.
     // Si ça échoue (offline par ex.), l'utilisateur est quand même déconnecté
     // localement ; au prochain reload la session sera nettoyée.
@@ -4026,9 +4071,21 @@ export default function App() {
         const formatted = bookingFromDb(created);
         setBookings(prev => [formatted, ...prev]);
         await refreshTokens();
+        // Programme les rappels (T-3h, T-1h, T-15m) si l'utilisateur le veut.
+        if (preferences.notifRides) {
+          ensureNotificationPermission()
+            .then((granted) => granted && scheduleBookingReminders(formatted))
+            .catch((e) => console.warn('schedule:', e?.message));
+        }
       } else {
         await sbUpdateBooking(b.id, b);
         setBookings(prev => prev.map(p => p.id === b.id ? b : p));
+        // L'heure ou le client a peut-être changé : on annule + replanifie.
+        if (preferences.notifRides) {
+          scheduleBookingReminders(b).catch((e) => console.warn('reschedule:', e?.message));
+        } else {
+          cancelBookingReminders(b.id).catch(() => {});
+        }
       }
       setFormOpen(false);
       setFormInitial(null);
@@ -4058,6 +4115,8 @@ export default function App() {
       await sbDeleteBooking(b.id);
       setBookings(prev => prev.filter(p => p.id !== b.id));
       setDetailBooking(null);
+      // Annule les rappels associés (T-3h / T-1h / T-15m)
+      cancelBookingReminders(b.id).catch((e) => console.warn('cancel:', e?.message));
     } catch (err) {
       alert(`Erreur lors de la suppression : ${err?.message || err}`);
     }
