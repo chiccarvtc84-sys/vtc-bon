@@ -36,7 +36,7 @@ import {
   verifySiret as sbVerifySiret,
   isDisposableEmail as sbIsDisposableEmail,
 } from './lib/supabase.js';
-import { watchNetwork, isNativePlatform } from './lib/platform.js';
+import { watchNetwork, isNativePlatform, preferencesGet, preferencesSet } from './lib/platform.js';
 import { checkPasswordStrength, isPasswordPwned } from './lib/passwordSecurity.js';
 import { parseVoiceCommand as parseVoiceCommandV2 } from './lib/voiceParser.js';
 import {
@@ -2730,7 +2730,10 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
 
       // Création du compte via Supabase Auth.
       // Le trigger SQL `handle_new_auth_user` (déployé) crée auto le profil
-      // dans public.users + transaction 'welcome' (+5 crédits).
+      // dans public.users + transaction 'welcome' (+5 crédits) — SAUF si
+      // ce device a déjà reçu un bonus welcome via un compte précédent ou
+      // un mode invité épuisé. Le device_fingerprint est passé en metadata
+      // pour que le trigger SQL fasse le contrôle anti-double-bonus.
       await sbSignUp({
         email: form.email.trim().toLowerCase(),
         password: form.password,
@@ -2738,6 +2741,7 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
         phone: form.phone || null,
         siret: form.siret.replace(/\s/g, ""),
         referredBy: refCode || null,
+        deviceFingerprint: fingerprint,
       });
 
       // Marquer cet appareil comme utilisé (anti-fraude local)
@@ -3684,6 +3688,16 @@ export default function App() {
 
   const isAuthenticated = !!currentUser || isGuest;
 
+  // --- Persistance du solde invité ---
+  // Dès que tokenBalance change en mode invité, on l'écrit dans Preferences
+  // (Capacitor sur mobile, localStorage en web). Comme ça si l'utilisateur
+  // ferme l'app, à la réouverture il retrouve son solde réel — pas de remise
+  // à 5 gratuite.
+  useEffect(() => {
+    if (!isGuest) return;
+    preferencesSet('guest_token_balance', String(Math.max(0, tokenBalance))).catch(() => {});
+  }, [tokenBalance, isGuest]);
+
   // --- Préférence "Rappel de courses" : si désactivée → annule tout,
   //     si réactivée → replanifie tout. Se déclenche aussi quand `bookings`
   //     change après login pour synchroniser la 1re fois.
@@ -3915,17 +3929,41 @@ export default function App() {
     setAuthScreen("login");
   };
 
-  const onGuest = () => {
+  const onGuest = async () => {
     setIsGuest(true);
     setCurrentUser(null);
     setAuthScreen(null);
     setTab("home");
-    // Mode invité : pas de chargement Supabase, l'app reste en lecture-seule mock
+    // Mode invité : on charge le solde de tokens persisté localement.
+    // 1er passage = 5 crédits offerts. Si l'invité a déjà consommé ses crédits
+    // précédemment (et fermé/rouvert l'app), on retrouve le solde réel —
+    // pas de "free reload" de crédits.
+    try {
+      const saved = await preferencesGet('guest_token_balance');
+      if (saved !== null) {
+        const n = parseInt(saved, 10);
+        setTokenBalance(Number.isFinite(n) ? Math.max(0, n) : 0);
+      } else {
+        // Premier passage en mode invité sur ce device → 5 crédits gratuits
+        setTokenBalance(INITIAL_TOKEN_BALANCE);
+        await preferencesSet('guest_token_balance', String(INITIAL_TOKEN_BALANCE));
+        await preferencesSet('guest_first_seen_at', new Date().toISOString());
+      }
+    } catch (e) {
+      console.warn('Lecture solde invité échouée :', e?.message);
+      setTokenBalance(INITIAL_TOKEN_BALANCE);
+    }
+    setBookings([]);
+    setInvoices([]);
+    setTokenHistory([]);
   };
 
   const onLogout = async () => {
     if (isGuest) {
-      // En mode invité, "Déconnexion" propose plutôt de créer un compte
+      // En mode invité, "Déconnexion" propose plutôt de créer un compte.
+      // ⚠️ Il faut désactiver isGuest AVANT de changer authScreen, sinon
+      // isAuthenticated reste à true et l'AuthScreens ne s'affiche pas.
+      setIsGuest(false);
       setAuthScreen("signup");
       return;
     }

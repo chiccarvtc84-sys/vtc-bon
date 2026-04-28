@@ -47,21 +47,27 @@ export async function getCurrentUser() {
 }
 
 /** Inscription complète (Auth + profil) */
-export async function signUp({ email, password, name, phone, siret, referredBy }) {
-  // Étape 1 : créer le compte Auth
+export async function signUp({ email, password, name, phone, siret, referredBy, deviceFingerprint }) {
+  // Le trigger SQL `handle_new_auth_user` lit raw_user_meta_data pour :
+  //  - récupérer name/phone/siret pour le profil
+  //  - lookup le code de parrainage (referred_by) → UUID parrain
+  //  - vérifier si le device_fingerprint a déjà reçu un bonus welcome
+  //    (anti-double-bonus : un même device ne reçoit le bonus qu'une fois)
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email,
     password,
     options: {
-      data: { name, phone, siret, referred_by: referredBy }
-    }
+      data: {
+        name,
+        phone,
+        siret,
+        referred_by: referredBy,
+        device_fingerprint: deviceFingerprint,
+      },
+    },
   });
 
   if (authError) throw authError;
-
-  // Le trigger handle_new_auth_user crée auto le profil dans public.users
-  // avec 5 crédits offerts via une transaction "welcome"
-
   return authData;
 }
 
