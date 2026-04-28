@@ -38,6 +38,7 @@ import {
 } from './lib/supabase.js';
 import { watchNetwork, isNativePlatform } from './lib/platform.js';
 import { checkPasswordStrength, isPasswordPwned } from './lib/passwordSecurity.js';
+import { parseVoiceCommand as parseVoiceCommandV2 } from './lib/voiceParser.js';
 
 /* -------------------------------------------------------------------------
    DATA MODEL / MOCK PROFILE (geo-aware: Avignon/Sorgues)
@@ -710,55 +711,204 @@ function BookingCard({ booking, onClick }) {
    VOICE CAPTURE MODAL
    ------------------------------------------------------------------------- */
 function VoiceCapture({ open, onClose, onConfirm }) {
+  // ---- États ----
   const [listening, setListening] = useState(false);
-  const [transcript, setTranscript] = useState("");
+  const [transcript, setTranscript] = useState("");        // texte cumulé (final + interim)
+  const [finalTranscript, setFinalTranscript] = useState(""); // que les chunks finalisés
   const [parsed, setParsed] = useState(null);
   const [supported, setSupported] = useState(true);
   const [error, setError] = useState("");
-  const recognitionRef = useRef(null);
+  const [silenceCountdown, setSilenceCountdown] = useState(0); // 5..0 quand on s'approche du timeout
 
+  // ---- Refs (n'invoquent pas le re-render) ----
+  const recognitionRef = useRef(null);
+  const silenceTimerRef = useRef(null);
+  const countdownTimerRef = useRef(null);
+  const finalTranscriptRef = useRef("");
+  const isStoppingRef = useRef(false);     // évite la double-fermeture
+
+  // Durée de silence avant arrêt automatique. L'API SpeechRecognition de
+  // Chrome/Safari coupe parfois après ~2s de silence ; on contrebalance en
+  // relançant la session quand 'onend' arrive trop tôt, et on tient notre
+  // propre minuterie pour décider du vrai arrêt.
+  const SILENCE_TIMEOUT_MS = 5000;
+
+  // ----- Cleanup quand on ferme la modale -----
   useEffect(() => {
     const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
     if (!SR) setSupported(false);
-    return () => { try { recognitionRef.current?.stop(); } catch(e){} };
+    return () => cleanupAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!open) {
-      setTranscript(""); setParsed(null); setError("");
-      try { recognitionRef.current?.stop(); } catch(e){}
+      cleanupAll();
+      setTranscript("");
+      setFinalTranscript("");
+      finalTranscriptRef.current = "";
+      setParsed(null);
+      setError("");
       setListening(false);
+      setSilenceCountdown(0);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const start = () => {
-    setError("");
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { setSupported(false); return; }
-    const r = new SR();
-    r.lang = "fr-FR"; r.continuous = false; r.interimResults = true; r.maxAlternatives = 1;
-    r.onresult = (e) => {
-      const t = Array.from(e.results).map(rr => rr[0].transcript).join(" ");
-      setTranscript(t);
-      if (e.results[e.results.length - 1].isFinal) setParsed(parseVoiceCommand(t));
-    };
-    r.onerror = (e) => { setError(e.error === "not-allowed" ? "Micro non autorisé" : "Erreur vocale"); setListening(false); };
-    r.onend = () => { setListening(false); if (transcript && !parsed) setParsed(parseVoiceCommand(transcript)); };
-    recognitionRef.current = r;
-    try { r.start(); setListening(true); } catch(e) { setError("Impossible de démarrer"); }
-  };
+  function cleanupAll() {
+    isStoppingRef.current = true;
+    if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+    if (countdownTimerRef.current) { clearInterval(countdownTimerRef.current); countdownTimerRef.current = null; }
+    try { recognitionRef.current?.stop(); } catch(_) {}
+    try { recognitionRef.current?.abort?.(); } catch(_) {}
+    recognitionRef.current = null;
+  }
 
-  const stop = () => { try { recognitionRef.current?.stop(); } catch(e){} setListening(false); };
+  // Reset du timer de silence : à chaque nouveau résultat (interim ou final),
+  // on relance le compte à rebours de 5s. Si rien n'arrive pendant 5s, on
+  // arrête proprement.
+  function resetSilenceTimer() {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    setSilenceCountdown(0);
+
+    // Lance un compte à rebours visuel à partir de 3 secondes restantes
+    // (= 2 secondes après le dernier mot, on commence à afficher le countdown)
+    silenceTimerRef.current = setTimeout(() => {
+      // 2s écoulées sans son, on commence à afficher 3..2..1
+      let remaining = 3;
+      setSilenceCountdown(remaining);
+      countdownTimerRef.current = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          clearInterval(countdownTimerRef.current);
+          countdownTimerRef.current = null;
+          setSilenceCountdown(0);
+          stopAndFinalize();   // arrêt automatique
+        } else {
+          setSilenceCountdown(remaining);
+        }
+      }, 1000);
+    }, 2000);
+  }
+
+  function startNewRecognition() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { setSupported(false); return null; }
+    const r = new SR();
+    r.lang = "fr-FR";
+    // continuous=true permet de garder la session ouverte tant qu'il y a du son
+    r.continuous = true;
+    r.interimResults = true;
+    r.maxAlternatives = 1;
+
+    r.onstart = () => {
+      isStoppingRef.current = false;
+      resetSilenceTimer();
+    };
+
+    r.onresult = (e) => {
+      // Cumule les segments FINAUX dans finalTranscriptRef et reconstruit
+      // l'affichage = final + dernier interim courant.
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const seg = e.results[i];
+        if (seg.isFinal) {
+          finalTranscriptRef.current = (finalTranscriptRef.current + " " + seg[0].transcript).trim();
+        } else {
+          interim += seg[0].transcript;
+        }
+      }
+      setFinalTranscript(finalTranscriptRef.current);
+      const fullText = (finalTranscriptRef.current + " " + interim).trim();
+      setTranscript(fullText);
+      // On parse en live pour donner du feedback visuel
+      if (fullText.length > 4) setParsed(parseVoiceCommandV2(fullText));
+      // Tout son perçu = on relance le timer
+      resetSilenceTimer();
+    };
+
+    r.onerror = (e) => {
+      // 'no-speech' arrive très souvent quand l'utilisateur fait une pause.
+      // On ne traite ça PAS comme une erreur — on laisse la session se
+      // terminer puis on la relance dans onend si on n'a pas demandé l'arrêt.
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        setError("Microphone non autorisé. Active-le dans les réglages de l'app.");
+        cleanupAll();
+        setListening(false);
+      } else if (e.error === "no-speech") {
+        // ignoré, géré par onend
+      } else if (e.error === "audio-capture") {
+        setError("Aucun micro détecté.");
+        cleanupAll();
+        setListening(false);
+      } else if (e.error !== "aborted") {
+        setError(`Erreur reconnaissance vocale : ${e.error}`);
+      }
+    };
+
+    r.onend = () => {
+      // Si l'utilisateur n'a pas explicitement demandé l'arrêt, on relance
+      // une nouvelle session : Chrome tronque parfois à ~2s de silence.
+      if (!isStoppingRef.current && listening) {
+        try {
+          recognitionRef.current = startNewRecognition();
+          recognitionRef.current?.start();
+        } catch (_) { /* déjà running, ignore */ }
+      }
+    };
+
+    return r;
+  }
+
+  function start() {
+    setError("");
+    finalTranscriptRef.current = "";
+    setFinalTranscript("");
+    setTranscript("");
+    setParsed(null);
+
+    const r = startNewRecognition();
+    if (!r) return;
+    recognitionRef.current = r;
+    try {
+      r.start();
+      setListening(true);
+    } catch (e) {
+      setError("Impossible de démarrer la dictée. Réessayez.");
+      setListening(false);
+    }
+  }
+
+  function stopAndFinalize() {
+    isStoppingRef.current = true;
+    if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+    if (countdownTimerRef.current) { clearInterval(countdownTimerRef.current); countdownTimerRef.current = null; }
+    setSilenceCountdown(0);
+    try { recognitionRef.current?.stop(); } catch(_) {}
+    setListening(false);
+    // Parse final
+    const finalText = finalTranscriptRef.current.trim();
+    if (finalText) {
+      setTranscript(finalText);
+      setParsed(parseVoiceCommandV2(finalText));
+    }
+  }
 
   const useExample = () => {
-    const example = "Je voudrais récupérer un Aurélien Matro à Avignon centre pour le ramener à la gare TGV, pour 12h50 ils seront 3 et ils auront certainement des valises";
+    const example = "dupont marseille avignon tgv 100 bornes 180 balles 12h30 ils seront 3 avec valises";
     setTranscript(example);
-    setParsed(parseVoiceCommand(example));
+    finalTranscriptRef.current = example;
+    setFinalTranscript(example);
+    setParsed(parseVoiceCommandV2(example));
   };
 
   const onManualEdit = (e) => {
-    setTranscript(e.target.value);
-    if (e.target.value.length > 10) setParsed(parseVoiceCommand(e.target.value));
+    const v = e.target.value;
+    setTranscript(v);
+    finalTranscriptRef.current = v;
+    if (v.length > 4) setParsed(parseVoiceCommandV2(v));
+    else setParsed(null);
   };
 
   const confirm = () => {
@@ -769,9 +919,14 @@ function VoiceCapture({ open, onClose, onConfirm }) {
     if (today < new Date()) today.setDate(today.getDate() + 1);
     const iso = today.toISOString().slice(0, 16);
     onConfirm({
-      customerName: parsed.customerName || "", pickupAddress: parsed.pickupAddress || "",
-      dropoffAddress: parsed.dropoffAddress || "", dateTime: iso,
-      passengers: parsed.passengers || 1, hasLuggage: parsed.hasLuggage || false,
+      customerName: parsed.customerName || "",
+      pickupAddress: parsed.pickupAddress || "",
+      dropoffAddress: parsed.dropoffAddress || "",
+      dateTime: iso,
+      passengers: parsed.passengers || 1,
+      hasLuggage: parsed.hasLuggage || false,
+      distance: parsed.distance ?? undefined,    // utilisé par estimatePrice si rempli
+      price: parsed.price ?? undefined,
     });
   };
 
@@ -791,14 +946,33 @@ function VoiceCapture({ open, onClose, onConfirm }) {
           </div>
 
           <div style={{ padding: "24px 0", display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
-            <button onClick={listening ? stop : start} disabled={!supported} className={listening ? "tp-pulse" : ""} style={{
-              width: 100, height: 100, borderRadius: "50%",
-              background: listening ? "var(--error)" : "var(--accent)", color: "#0B0B0D", border: "none",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: supported ? "pointer" : "not-allowed",
-              boxShadow: "0 12px 40px -8px rgba(244,185,66,0.4)", opacity: supported ? 1 : 0.5,
-            }}>
+            <button
+              onClick={listening ? stopAndFinalize : start}
+              disabled={!supported}
+              className={listening ? "tp-pulse" : ""}
+              aria-label={listening ? "Arrêter la dictée" : "Démarrer la dictée"}
+              style={{
+                width: 100, height: 100, borderRadius: "50%",
+                background: listening ? "var(--error)" : "var(--accent)", color: "#0B0B0D", border: "none",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                cursor: supported ? "pointer" : "not-allowed",
+                boxShadow: "0 12px 40px -8px rgba(244,185,66,0.4)", opacity: supported ? 1 : 0.5,
+                position: "relative",
+              }}
+            >
               {listening ? <MicOff size={36}/> : <Mic size={36}/>}
+              {/* Anneau de countdown silence (apparaît à 3s avant arrêt auto) */}
+              {listening && silenceCountdown > 0 && (
+                <div style={{
+                  position: "absolute", top: -8, right: -8,
+                  width: 30, height: 30, borderRadius: "50%",
+                  background: "var(--accent)", color: "#0B0B0D",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontWeight: 700, fontSize: 14,
+                  border: "2px solid #0B0B0D",
+                  animation: "tp-pulse 1s ease-in-out infinite",
+                }}>{silenceCountdown}</div>
+              )}
             </button>
 
             {listening && (
@@ -810,11 +984,34 @@ function VoiceCapture({ open, onClose, onConfirm }) {
             )}
 
             <div style={{ textAlign: "center", minHeight: 20 }}>
-              {listening ? <div style={{ fontSize: 13, color: "var(--accent)", fontWeight: 600 }}>À l'écoute...</div>
-                : supported ? <div style={{ fontSize: 13, color: "var(--text-dim)" }}>Appuyez pour parler</div>
-                : <div style={{ fontSize: 12, color: "var(--error)" }}>Votre navigateur ne supporte pas la dictée vocale</div>}
+              {listening ? (
+                <div style={{ fontSize: 13, color: "var(--accent)", fontWeight: 600 }}>
+                  {silenceCountdown > 0
+                    ? `Silence détecté — arrêt dans ${silenceCountdown}s`
+                    : "À l'écoute… parlez naturellement"}
+                </div>
+              ) : supported ? (
+                <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
+                  Appuyez pour parler. Arrêt auto après 5s de silence.
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "var(--error)" }}>
+                  Votre navigateur ne supporte pas la dictée vocale
+                </div>
+              )}
               {error && <div style={{ fontSize: 12, color: "var(--error)", marginTop: 4 }}>{error}</div>}
             </div>
+
+            {/* Bouton secondaire : arrêt manuel explicite */}
+            {listening && (
+              <button
+                onClick={stopAndFinalize}
+                className="tp-btn tp-btn-outline"
+                style={{ fontSize: 13, padding: "8px 16px" }}
+              >
+                <Check size={14}/> J'ai fini
+              </button>
+            )}
           </div>
 
           <div>
@@ -843,6 +1040,8 @@ function VoiceCapture({ open, onClose, onConfirm }) {
                 <FieldRow icon={Clock} label="Heure" value={parsed.time || "—"} detected={!!parsed.time}/>
                 <FieldRow icon={Users} label="Passagers" value={String(parsed.passengers)} detected/>
                 <FieldRow icon={Briefcase} label="Bagages" value={parsed.hasLuggage ? "Oui" : "Non"} detected/>
+                <FieldRow icon={Car} label="Distance" value={parsed.distance != null ? `${parsed.distance} km` : "—"} detected={parsed.distance != null}/>
+                <FieldRow icon={Euro} label="Tarif" value={parsed.price != null ? `${parsed.price} €` : "—"} detected={parsed.price != null}/>
               </div>
               <button onClick={confirm} className="tp-btn tp-btn-primary" style={{ width: "100%", marginTop: 14, padding: "14px 16px", fontSize: 15 }}>
                 <Check size={18}/> Créer le bon de course
@@ -3745,8 +3944,19 @@ export default function App() {
   // --- Core handlers ---
   const onVoiceConfirm = (parsed) => {
     setVoiceOpen(false);
+    // Les valeurs dictées (distance, price) priment sur les défauts.
+    // Sinon on tombe sur des estimations raisonnables (10 km, 20 min, 0 €).
     setFormInitial({
-      ...parsed, distance: 10, duration: 20, price: 0, notes: "", type: "forfait",
+      distance: 10,
+      duration: 20,
+      price: 0,
+      notes: "",
+      type: "forfait",
+      ...parsed,
+      // Si l'utilisateur a dicté un prix, on le respecte. Sinon on laisse
+      // 0 (le formulaire calculera l'estimation automatique).
+      price: parsed.price ?? 0,
+      distance: parsed.distance ?? 10,
     });
     setFormOpen(true);
   };
