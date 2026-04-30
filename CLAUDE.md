@@ -2,65 +2,111 @@
 
 Ce fichier est lu **automatiquement** par Claude Code à chaque session. Il contient la mission, l'état du projet, et les règles de travail. Lis-le avant toute action.
 
-> **Source détaillée** : `PROMPT_CLAUDE_CODE.md` à la racine. Les guides de phase sont dans `guides/phase2…phase9_detaillee_debutant.md`.
+> **Source détaillée** : `docs/CHANGELOG.md` pour l'historique des livraisons, `docs/ARCHITECTURE.md` pour le schéma technique, `docs/SECURITY_AUDIT.md` pour l'audit, `TODO_HUMAN.md` pour les actions hors-code.
 
 ---
 
 ## 🎯 Mission
 
-Finaliser **TrajetPro**, une application VTC React + Supabase + Capacitor pour chauffeurs indépendants français. Bons de course conformes décret 2017-483, facturation conforme CGI, paiements Stripe, builds iOS + Android.
+**TrajetPro est livré.** Application VTC React + Supabase + Capacitor pour chauffeurs indépendants français : bons de course conformes décret 2017-483, facturation conforme CGI, paiements Stripe Checkout, builds iOS + Android scaffoldés.
 
-L'utilisateur (`@moi`) est chauffeur VTC à Sorgues (84) **sans compétences techniques**. Il faut tout livrer clé en main : code propre, repo Git versionné, builds prêts à uploader.
+L'utilisateur (`@moi`) est chauffeur VTC à Sorgues (84) **sans compétences techniques**. Le code est terminé ; il ne reste que les actions humaines de publication (Apple Developer, Mac/Xcode, Google Play, screenshots, soumission stores) listées dans `TODO_HUMAN.md`.
+
+Le rôle de Claude est désormais la **maintenance** : correctifs ponctuels, ajustements demandés, accompagnement de la phase de soumission.
 
 ## 📊 État actuel
 
 | Phase | Description | Statut |
 |---|---|---|
-| 1 | Conception (App.jsx 3700 lignes) | ✅ 100% |
-| 2 | Backend Supabase (6 tables + RLS + 4 RPC) | ✅ 100% |
-| 3 | Anti-fraude (email + SIRET INSEE + risk score) | ✅ 100% |
-| 4 | Frontend connecté Supabase | 🟡 50% |
-| 5 | Stripe (paiements crédits) | ⏳ 0% |
-| 6 | Build mobile Capacitor (iOS + Android) | ⏳ 0% |
-| 7-9 | Tests + soumission stores + lancement | ⏳ 0% (humain) |
+| 1 | Conception (App.jsx + UI complète) | ✅ Livré |
+| 2 | Backend Supabase (7 tables + RLS + RPC) | ✅ Livré (6 migrations appliquées) |
+| 3 | Anti-fraude (email + SIRET INSEE + risk score) | ✅ Livré (Edge Function `verify-siret` déployée) |
+| 4 | Frontend connecté Supabase (auth, bookings, invoices, tokens, parrainage) | ✅ Livré (v0.4.0) |
+| 5 | Stripe Checkout end-to-end (4 produits + webhook + facture auto) | ✅ Livré (v0.5.0) |
+| 6 | Capacitor mobile (iOS + Android scaffold + assets + permissions) | ✅ Livré (v0.6.0) |
+| **Post-v0.6** | Audit sécurité, dictée vocale refondue, notifications de rappel, anti-double-bonus | ✅ Livré (5 commits) |
+| 7-9 | Tests stores + soumission App Store / Play Store + lancement | ⏳ **Humain** (cf. `TODO_HUMAN.md`) |
 
-## 🔴 Phase 4 — Reste à finir
+## ✅ Ce qui a été livré
 
-1. **Étape 8.6** : `onDeleteBooking` + `onInvoiceBooking` → branchement Supabase (cf. `guides/phase4_detaillee_debutant.md` étape 8.6)
-2. **Étape 8.7** : `onLogout` → `supabase.auth.signOut()` + reset état
-3. **Achat crédits** : `PurchaseModal` → enregistrer dans `token_transactions` (dev) puis Stripe (prod, Phase 5)
-4. **Parrainage** : `onReferralValidate` → `supabase.rpc('credit_referral_bonus', …)`
-5. **Nettoyage data factice** : supprimer `INITIAL_BOOKINGS`, `INITIAL_INVOICES`, `INITIAL_TOKEN_HISTORY`, `DEMO_USER`, refs à `u_demo001`
-6. **Trigger profil** : auto-créer `public.users` au signup + crédit 5 tokens via transaction `welcome` (source unique de vérité = `token_transactions`)
-7. **Test du flow complet** : signup → email → login → 5 crédits → bon → décrément → facture → décrément → pack → ajout crédits → logout → relogin → données persistées
+### Frontend (React 19 + Vite 6)
+- `src/App.jsx` (~4 400 lignes) : ~25 composants/écrans cohérents
+  - Écrans : Welcome, Login, Signup, DeviceBlocked, Home, Bookings, BookingDetail, BookingForm, Invoices, InvoiceDetail, Tokens, Profile, Referral, Settings, Terms, Help
+  - Modals : Voice, Purchase, PurchaseDetail, Insufficient, MonthlyBonus
+  - Mode invité avec bannière et data en mémoire
+- 5 helpers `src/lib/` :
+  - `supabase.js` — auth, bookings, invoices, tokens, parrainage, Stripe Checkout, fingerprint
+  - `voiceParser.js` — parser NLP tolérant (multi-passes, fuzzy match villes, normalisation ASR Chrome FR)
+  - `notifications.js` — rappels T-3h / T-1h / T-15m, cross-platform (Capacitor natif + Web)
+  - `passwordSecurity.js` — protection mot de passe leaked via HaveIBeenPwned k-anonymity
+  - `platform.js` — wrappers `isNativePlatform`, `watchNetwork`, `preferences*` (web ↔ Capacitor)
 
-## 🟠 Phase 5 — Stripe
+### Backend Supabase (`olmhckwethdcxhvsrfie`, région West EU - Paris)
+- **7 tables** avec RLS activée : `users`, `bookings`, `invoices`, `token_transactions`, `device_fingerprints`, `verification_codes`, `blocked_email_domains`
+- **6 migrations** appliquées :
+  1. `handle_new_auth_user_trigger` — création auto profil + welcome bonus
+  2. `fix_handle_new_auth_user_referred_by_uuid` — fix UUID/text
+  3. `security_hardening_rpc_and_rls` — durcissement RPC
+  4. `security_revoke_trigger_functions_from_anon` (×2)
+  5. `anti_double_welcome_bonus_per_device` — un device = un bonus
+- **3 Edge Functions** ACTIVE :
+  - `verify-siret` (no JWT) — validation SIRET via API INSEE
+  - `create-checkout-session` (JWT requis) — crée la session Stripe Checkout
+  - `stripe-webhook` (no JWT, signature vérifiée) — crédit tokens + facture conforme CGI
+- Trigger `trg_sync_token_balance` : `users.token_balance` toujours = SUM(`token_transactions.tokens_delta`)
 
-Suivre `guides/phase5_detaillee_debutant.md` :
-- 4 produits Stripe (pack20, pack40, pack50, pack80) — un MCP Stripe est disponible (`mcp__…__create_product`, etc.)
-- Edge Functions : `create-payment-intent` + `stripe-webhook`
-- Secrets : `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` côté serveur uniquement
-- Branchement `PurchaseModal` avec `@stripe/stripe-js`
-- Carte test : `4242 4242 4242 4242`
-- ⚠️ **Facture côté backend** dans le webhook : numéro `TRP-2026-XXXX`, empreinte fiscale, TVA intracommunautaire
+### Paiements Stripe (compte `acct_1TPbCvGYVtGQnVrZ`, Test mode)
+- 4 produits créés : Pack Découverte (20 crédits, 2 €), Essentiel (40, 3,50 €), Confort (50, 4 €), Pro (80, 5 €)
+- Webhook `we_1TQuUgGYVtGQnVrZ0vtAsKgn` → `checkout.session.completed` + `payment_intent.payment_failed`
+- Carte de test : `4242 4242 4242 4242` / `12/34` / `123`
+- Mode invité conservé : `purchaseTokensDev` sans Stripe pour démo
+- ⚠️ **Reste en Test mode** ; passage Live mode = action humaine (validation Stripe)
 
-## 🟡 Phase 6 — Capacitor mobile
+### Mobile (Capacitor 7)
+- `npx cap add android` ✅ projet Gradle dans `android/`, buildable depuis Windows
+- `npx cap add ios` ✅ projet Xcode dans `ios/`, **`pod install` à faire sur Mac avant 1er build**
+- Permissions configurées : Android `AndroidManifest.xml` (INTERNET, RECORD_AUDIO, LOCATION, CAMERA, POST_NOTIFICATIONS…) + iOS `Info.plist` (`NSMicrophone`, `NSSpeechRecognition`, `NSLocationWhenInUse`, `NSCamera`)
+- Assets générés (`scripts/generate-assets.mjs` + `@capacitor/assets`) : 113 déclinaisons Android + iOS
+- ⚠️ Icône et splash sont des **placeholders** ; remplacer `assets/icon.png` (1024×1024) et `assets/splash.png` (2732×2732) avant build store, puis `npm run assets`
 
-Suivre `guides/phase6_detaillee_debutant.md` :
-- `npx cap init` → bundle `com.trajetpro.app`
-- `npx cap add ios` + `npx cap add android`
-- Permissions `Info.plist` + `AndroidManifest.xml` (micro, locale, caméra)
-- Icônes 1024×1024 + splash 2732×2732 → `npx capacitor-assets generate`
-- Builds `.ipa` (Xcode, Mac requis) + `.aab` signé (Android Studio)
-- ⚠️ **CRITIQUE** : keystore Android sauvegardé en 3 endroits (sinon plus jamais d'update)
+### Sécurité (audit complet — `docs/SECURITY_AUDIT.md`)
+- 🔴 4 critiques corrigées (auto-crédit illimité tokens, sabotage tokens d'un autre user, etc.)
+- 🟠 11 hautes corrigées
+- 🟡 13 moyennes corrigées
+- RLS sur toutes les tables, RPC `SECURITY DEFINER` avec `auth.uid()` check, idempotence webhook Stripe (index UNIQUE sur `stripe_payment_intent_id`)
+- Aucun secret hardcodé ; `.env` git-ignoré
+
+### Différenciants métier
+- **Dictée vocale** (5 s) → bon de course pré-rempli, parser NLP tolérant aux fautes ASR
+- **Notifications de rappel** automatiques avant chaque course (T-3h, T-1h, T-15m)
+- **Parrainage** : parrain +10, filleul +5
+- **Bonus mensuel** : +1 crédit/mois automatique
+- **Mode invité** : tester l'app sans créer de compte
+- **Anti-fraude device** : un même appareil ne reçoit le bonus welcome qu'une fois
+
+## ⏳ Reste à faire — actions humaines uniquement
+
+Tout le code est livré. Les actions ci-dessous **ne peuvent pas être faites par Claude** (matériel, comptes payants, design créatif). Détails dans `TODO_HUMAN.md` :
+
+1. **Compte Apple Developer** — 99 €/an
+2. **Mac avec Xcode 15+** — pour build `.ipa` et soumission App Store (alternatives : MacInCloud, GitHub Actions runner)
+3. **Compte Google Play Console** — 25 € unique
+4. **Keystore Android** — à générer ET sauvegarder en 3 endroits (perte = plus jamais d'update)
+5. **Icône + splash définitifs** (1024×1024 et 2732×2732) — Figma / Fiverr / IA
+6. **Screenshots stores** (3 par taille iPhone + 2 Android + feature graphic)
+7. **Politique de confidentialité** hébergée à URL publique
+8. **Bêta TestFlight + Internal Testing Google Play** (1-2 semaines)
+9. **Passage Stripe Live mode** (validation business par Stripe)
+10. **Choix politique de remboursement** (CGU)
 
 ## ⚙️ Stack technique
 
 - **Frontend** : React 19 + Vite 6 + Capacitor 7
 - **Backend** : Supabase (PostgreSQL + Auth + Edge Functions Deno)
-- **Paiements** : Stripe (Test mode dev, Live prod)
+- **Paiements** : Stripe Checkout hosted (Test mode dev)
 - **Région Supabase** : West EU (Paris) — projet `olmhckwethdcxhvsrfie` (`trajetpro-prod`)
 - **Bundle ID** : `com.trajetpro.app`
+- **Plugins Capacitor** : `app`, `network`, `preferences`, `local-notifications`
 
 ## 🎨 Charte graphique (NE PAS DÉVIER)
 
@@ -95,58 +141,60 @@ REFERRAL_BONUS_REFEREE = 5
 MONTHLY_BONUS_TOKENS = 1
 ```
 
-## 🛡️ Règles de sécurité non négociables
+## 🛡️ Règles de sécurité non négociables (déjà appliquées partout)
 
 - **Jamais** de `STRIPE_SECRET_KEY` ni de `SUPABASE_SERVICE_ROLE_KEY` côté client
-- **RLS activée** sur toutes les tables (déjà fait phase 2)
-- **Validation backend** sur achat tokens et facturation
-- JWT vérifié sur les Edge Functions (sauf `verify-siret` et `stripe-webhook`)
+- **RLS activée** sur toutes les tables
+- **Validation backend** sur achat tokens (webhook signature) et facturation (RPC `SECURITY DEFINER` + `auth.uid()` check)
+- JWT vérifié sur les Edge Functions (sauf `verify-siret` et `stripe-webhook` qui ont leur propre vérification)
+- Index UNIQUE sur `stripe_payment_intent_id` (anti-rejeu webhook)
+- Mots de passe testés contre HaveIBeenPwned (k-anonymity, gratuit)
 
 ## 📜 Conformité française
 
 - **Décret 2017-483** : bons avec SIRET, n° VTC, carte pro, immatriculation, modèle véhicule
-- **CGI** : factures numérotation chronologique sans rupture, empreinte fiscale, QR code
-- **TVA** : 10% transport personnes, auto-liquidation UE hors-FR
-- **RGPD** : politique de confidentialité, droit à l'effacement, hébergement EU
+- **CGI** : factures numérotation chronologique sans rupture, empreinte fiscale SHA-256, QR code
+- **TVA** : 10% transport personnes (bons), 20% prestation numérique (achat tokens), auto-liquidation UE hors-FR
+- **RGPD** : politique de confidentialité, droit à l'effacement, hébergement EU (Paris)
 
-## 📐 Règles de travail
+## 📐 Règles de travail (mode maintenance)
 
-1. **Lis App.jsx en entier avant de modifier** quoi que ce soit (3649 lignes mais cohérent).
-2. **Phase par phase** : ne pas attaquer la N+1 avant d'avoir testé la N.
-3. **Commits Git réguliers** avec format : `feat: Phase X.Y - description` / `fix: …` / `refactor: …`.
-4. **Tag les versions** : `v0.4.0` après Phase 4, `v0.5.0` après Phase 5, etc.
-5. **Changelog** : maintenir `docs/CHANGELOG.md` au fur et à mesure.
-6. **Décisions non triviales** : proposer 2-3 options avec pros/cons avant de choisir.
-7. **Cohérence données** à vérifier systématiquement :
+1. **Lis App.jsx en entier avant de modifier** quoi que ce soit (4 385 lignes mais cohérent).
+2. **Commits Git réguliers** avec format : `feat: …` / `fix: …` / `refactor: …` / `security: …` / `docs: …`.
+3. **Tag les versions** : `v0.6.0` était le scaffold mobile ; prochaine `v1.0.0` à la première soumission store.
+4. **Changelog** : maintenir `docs/CHANGELOG.md` à jour (les commits post-v0.6.0 ne sont pas encore consignés).
+5. **Décisions non triviales** : proposer 2-3 options avec pros/cons avant de choisir.
+6. **Cohérence données** à vérifier systématiquement :
    - `users.token_balance` = `SUM(token_transactions.tokens_delta)` pour ce user
    - Numérotation factures continue (pas de saut)
    - Pas de bons orphelins (`user_id` invalide)
-8. **Ce que tu ne peux pas faire** (Apple Developer, Google Play, builds Mac/Xcode) → `TODO_HUMAN.md`.
-9. **Si bloqué** → `BLOCKERS.md` + continue sur autre tâche.
+7. **Ce que tu ne peux pas faire** (Apple Developer, Google Play, builds Mac/Xcode, design créatif) → `TODO_HUMAN.md`.
+8. **Si bloqué** → `BLOCKERS.md` + continue sur autre tâche.
+9. **Avant tout changement de schéma SQL** : créer une migration nommée (`apply_migration` du MCP Supabase), jamais de `execute_sql` direct sur la prod.
 
 ## 🛠️ Outils MCP disponibles
 
-- **gitnexus** (`mcp__gitnexus__*`) : navigation knowledge graph du code (utiliser pour `query`, `context`, `impact` avant de modifier des symboles).
-- **Supabase** (`mcp__…__execute_sql`, `apply_migration`, `deploy_edge_function`, `get_advisors`, etc.) : interaction directe avec le projet `olmhckwethdcxhvsrfie`.
-- **Stripe** (`mcp__…__create_product`, `create_price`, `list_products`, etc.) : création des packs et configuration paiements.
+- **Supabase** (`mcp__…__execute_sql`, `apply_migration`, `deploy_edge_function`, `get_advisors`, `list_tables`, `list_migrations`, `list_edge_functions`) — projet `olmhckwethdcxhvsrfie`
+- **Stripe** (`mcp__…__list_products`, `create_product`, `create_price`, `list_payment_intents`, `list_invoices`) — compte `acct_1TPbCvGYVtGQnVrZ`
+- **Claude in Chrome** / **Claude Preview** : ouvrir l'app Vite en preview pour tester visuellement
 
 ## 💬 Style
 
 - Français uniquement.
 - Vulgariser le jargon technique pour l'utilisateur.
 - Expliquer le **pourquoi** des choix.
-- Honnête : si une partie du design est mauvaise, le dire avec une alternative.
+- Honnête : si une partie du code est mauvaise, le dire avec une alternative.
 - Ne pas se plaindre des bugs existants — les corriger sereinement.
 
 ## 🗂️ Fichiers de tracking à maintenir
 
-- `docs/CHANGELOG.md` — historique des changements
-- `TODO_HUMAN.md` — actions humaines requises
-- `BLOCKERS.md` — blocages en cours
+- `docs/CHANGELOG.md` — historique des changements (à compléter avec les 5 commits post-v0.6.0)
+- `TODO_HUMAN.md` — actions humaines requises (publication stores)
+- `BLOCKERS.md` — blocages en cours (1 actif non bloquant : clé publique Stripe à vérifier)
 - `docs/ARCHITECTURE.md` — schéma technique
-- `docs/DEPLOYMENT.md` — procédure de mise en prod
-- `docs/TROUBLESHOOTING.md` — bugs connus + solutions
+- `docs/SECURITY_AUDIT.md` — audit complet (4C + 11H + 13M corrigées)
+- `docs/TESTING_MOBILE.md` — guide pas-à-pas pour tester sur Android et iOS
 
 ---
 
-**Allez, on s'y met.** 🚀
+**Le code est prêt. La balle est dans le camp humain pour la publication.** 🚀

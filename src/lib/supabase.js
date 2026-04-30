@@ -15,13 +15,29 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error("⚠️ Supabase URL ou Anon Key manquante dans .env");
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-});
+// ⚠️ Singleton GLOBAL du client Supabase.
+//
+// Sans ça, Vite HMR (Hot Module Reload) crée une nouvelle instance du client
+// chaque fois qu'on édite ce fichier. Conséquence : plusieurs `GoTrueClient`
+// instances dans la page (warning observé : "Multiple GoTrueClient instances
+// detected"), qui se battent pour le verrou auth → login qui pend, refresh
+// qui déconnecte, etc.
+//
+// On stocke le client sur `globalThis` avec une clé unique. Si l'instance
+// existe déjà, on la réutilise au lieu d'en créer une nouvelle.
+const SB_GLOBAL_KEY = '__trajetpro_supabase_client__';
+const _global = /** @type {any} */ (globalThis);
+
+export const supabase =
+  _global[SB_GLOBAL_KEY] ||
+  (_global[SB_GLOBAL_KEY] = createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+  }));
+
 
 // ----------------------------------------------------------------------------
 // Authentification
@@ -71,23 +87,57 @@ export async function signUp({ email, password, name, phone, siret, referredBy, 
   return authData;
 }
 
-/** Connexion par email/mot de passe */
+/** Connexion par email/mot de passe.
+ *  Le bonus mensuel n'est PAS crédité ici : il est appelé dans `loadUserData`
+ *  côté React, après la transition d'état. Le faire ici ajoutait un await
+ *  bloquant qui pouvait pendre quand le verrou auth interne du SDK n'était
+ *  pas relâché à temps (cas typique : HMR + multiple GoTrueClient instances).
+ */
 export async function signIn(email, password) {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw error;
-
-  // Donner le bonus mensuel si dû
-  if (data.user) {
-    await supabase.rpc('credit_monthly_bonus', { p_user_id: data.user.id });
-  }
-
   return data;
 }
 
-/** Déconnexion */
+/**
+ * Déconnexion robuste.
+ *
+ * Le bug que ce code prévient : `supabase.auth.signOut()` est async, donc si
+ * l'utilisateur ferme la page entre l'appel et la fin de la requête réseau,
+ * les clés JWT peuvent rester dans `localStorage`. À la réouverture,
+ * `getSession()` les retrouve et "restaure" l'ancienne session — l'utilisateur
+ * croit être déconnecté mais ne l'est pas.
+ *
+ * Parade : on **purge synchroniquement** toutes les clés Supabase du
+ * localStorage AVANT le `await`. Même si la requête réseau échoue ou est
+ * interrompue, le navigateur ne retrouvera plus de session au prochain load.
+ */
 export async function signOut() {
-  const { error } = await supabase.auth.signOut();
-  if (error) throw error;
+  // 1) Purge synchrone du localStorage (clés `sb-*` et `supabase*`).
+  //    Garantit qu'au prochain reload, getSession() retournera null
+  //    même si l'étape 2 ci-dessous est interrompue (fermeture de tab,
+  //    coupure réseau, etc.).
+  if (typeof localStorage !== 'undefined') {
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith('sb-') || k.toLowerCase().includes('supabase'))) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+  }
+
+  // 2) Invalide la session côté serveur et propage l'event SIGNED_OUT
+  //    aux autres tabs/listeners. Scope 'local' = on ne touche pas aux
+  //    autres devices du même utilisateur (utile s'il est connecté sur
+  //    son téléphone aussi). Best-effort : si ça échoue, l'étape 1 a
+  //    déjà nettoyé localement.
+  try {
+    await supabase.auth.signOut({ scope: 'local' });
+  } catch (e) {
+    console.warn('signOut() serveur a échoué (déjà déconnecté localement) :', e?.message);
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -302,9 +352,40 @@ export async function createCheckoutSession(packageId) {
     body: { packageId },
   });
   if (error) {
-    // Supabase functions.invoke renvoie une erreur sans body JSON parsé.
-    // On essaye de récupérer le détail dans error.context si possible.
-    const detail = error?.context?.body || error?.message || 'Erreur Stripe';
+    // En v2.45 du SDK Supabase, `error.context` est une Response et son
+    // `body` est un ReadableStream non lu — il faut donc appeler .text()
+    // pour récupérer la chaîne, puis parser le JSON.
+    //
+    // La fonction Edge renvoie en mode verbose :
+    //   { error: "...", detail: "...", stripe_code: "...", stripe_type: "...", stripe_status: ... }
+    // On préfère `detail` (le vrai message Stripe) à `error` (générique).
+    let detail = error?.message || 'Erreur Stripe';
+    let parsed = null;
+    if (error?.context && typeof error.context.text === 'function') {
+      try {
+        const raw = await error.context.text();
+        if (raw) {
+          try {
+            parsed = JSON.parse(raw);
+            // Priorité : detail (Stripe) > error (générique) > message
+            detail = parsed?.detail || parsed?.error || parsed?.message || raw;
+          } catch {
+            detail = raw;
+          }
+        }
+      } catch {
+        // body déjà consommé
+      }
+    }
+    console.error('[createCheckoutSession] Edge function error:', {
+      status: error?.context?.status,
+      detail,
+      stripe_code: parsed?.stripe_code,
+      stripe_type: parsed?.stripe_type,
+      stripe_status: parsed?.stripe_status,
+      fullBody: parsed,
+      raw: error,
+    });
     throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
   }
   if (!data?.url) {

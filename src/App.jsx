@@ -568,7 +568,7 @@ function TokenBadge({ balance, onClick, compact = false }) {
 /* -------------------------------------------------------------------------
    HOME / DASHBOARD
    ------------------------------------------------------------------------- */
-function HomeScreen({ bookings, invoices, tokenBalance, isGuest, onQuickVoice, onNewBooking, onOpenBooking, onGoTab, onOpenPurchase, onPromptSignup }) {
+function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, onQuickVoice, onNewBooking, onOpenBooking, onGoTab, onOpenPurchase, onPromptSignup }) {
   const today = new Date();
   const todayBookings = bookings.filter(b => new Date(b.dateTime).toDateString() === today.toDateString());
   const weekRevenue = invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.amount, 0);
@@ -583,7 +583,7 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, onQuickVoice, o
             </div>
             <h1 className="tp-serif" style={{ fontSize: 32, fontWeight: 600, margin: "6px 0 0", lineHeight: 1.1 }}>
               Bonjour,<br/>
-              <span style={{ color: "var(--accent)" }}>{DRIVER_PROFILE.firstName}</span>.
+              <span style={{ color: "var(--accent)" }}>{currentUser?.name?.split(' ')[0] || DRIVER_PROFILE.firstName}</span>.
             </h1>
           </div>
           <TokenBadge balance={tokenBalance} onClick={() => onGoTab("tokens")}/>
@@ -2546,7 +2546,7 @@ function LoginScreen({ onChangeMode, onLogin }) {
     if (!email || !password) { setError("Email et mot de passe requis"); return; }
     setLoading(true);
     try {
-      // Connexion via Supabase Auth + bonus mensuel automatique côté helper
+      // Connexion via Supabase Auth
       const { user } = await sbSignIn(email.trim().toLowerCase(), password);
       if (!user) {
         throw new Error("Connexion impossible");
@@ -3716,8 +3716,10 @@ export default function App() {
   // Appelé après login (ou au reload si la session existait déjà).
   // Charge profil + bookings + invoices + token_transactions.
   // Crédite aussi le bonus de parrainage si c'est la première connexion d'un filleul.
+  // Retourne true si le chargement a abouti (currentUser set), false sinon.
+  // Le caller doit utiliser ce retour pour décider de quitter l'écran welcome.
   const loadUserData = async (authUserId) => {
-    if (!authUserId) return;
+    if (!authUserId) return false;
     setDataLoading(true);
     try {
       // Profil (avec retry court : le trigger SQL crée le profil juste après le signup,
@@ -3735,7 +3737,7 @@ export default function App() {
       if (!profileRow) {
         console.error("Profil introuvable après login — trigger handle_new_auth_user a peut-être échoué");
         setDataLoading(false);
-        return;
+        return false;
       }
       const profile = profileFromDb(profileRow);
 
@@ -3806,8 +3808,11 @@ export default function App() {
       } catch (e) {
         console.warn('Resync notifications échoué :', e?.message);
       }
+      // Toutes les données sont chargées et le state React est à jour.
+      return true;
     } catch (err) {
       console.error("Erreur chargement données :", err);
+      return false;
     } finally {
       setDataLoading(false);
     }
@@ -3869,30 +3874,57 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
 
-    // Vérifier la session existante au démarrage
+    // Vérifier la session existante au démarrage.
+    // ⚠️ ORDRE IMPORTANT : on garde l'écran de welcome / spinner tant que
+    // loadUserData() n'a pas terminé. Sinon l'utilisateur voit l'app
+    // principale avec des valeurs par défaut (DRIVER_PROFILE) pendant
+    // 500ms-1s pendant que le profil se charge en arrière-plan.
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (mounted) {
-        if (session?.user) {
-          setAuthScreen(null);
-          setIsGuest(false);
-          await loadUserData(session.user.id);
-          // Si on revient de Stripe Checkout, gérer le retour
-          await handleCheckoutReturn(session.user.id);
-        }
-        setAuthChecked(true);
+      // Garde-fou : sur certains setups (localhost + StrictMode + HMR),
+      // getSession peut se bloquer indéfiniment. Au bout de 5s, on abandonne
+      // et on traite comme "pas de session" → l'utilisateur voit l'écran
+      // welcome et peut se connecter normalement.
+      const sessionResult = await Promise.race([
+        supabase.auth.getSession(),
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ data: { session: null }, _timeout: true }), 5000),
+        ),
+      ]);
+      const session = sessionResult?.data?.session;
+      if (sessionResult?._timeout) {
+        console.warn('[AUTH] getSession timeout 5s — fallback welcome screen');
       }
+      if (mounted && session?.user) {
+        setIsGuest(false);
+        const ok = await loadUserData(session.user.id);
+        if (mounted) await handleCheckoutReturn(session.user.id);
+        if (mounted && ok) setAuthScreen(null);
+      }
+      if (mounted) setAuthChecked(true);
     })();
 
     // Écouter les changements (login/logout depuis n'importe où)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
       if (event === 'SIGNED_IN' && session?.user) {
-        setAuthScreen(null);
         setIsGuest(false);
-        await loadUserData(session.user.id);
-        await handleCheckoutReturn(session.user.id);
-        setTab("home");
+        // ⚠️ CRITIQUE : on déferre TOUT travail async via setTimeout(..., 0).
+        // Sans ça, le callback async bloque le verrou interne du SDK Supabase,
+        // ce qui crée un deadlock avec `getSession()` et les requêtes
+        // supabase.from(...) déclenchées par loadUserData.
+        // Symptôme observé : getSession ne résout jamais (timeout 5s),
+        // loadUserData entre mais ne termine pas (premier `select()` bloqué).
+        // Réf : https://github.com/supabase/supabase-js/issues/580
+        const userId = session.user.id;
+        setTimeout(async () => {
+          if (!mounted) return;
+          const ok = await loadUserData(userId);
+          if (mounted) await handleCheckoutReturn(userId);
+          if (mounted && ok) {
+            setAuthScreen(null);
+            setTab("home");
+          }
+        }, 0);
       } else if (event === 'SIGNED_OUT') {
         setCurrentUser(null);
         setIsGuest(false);
@@ -4030,14 +4062,13 @@ export default function App() {
     // Les valeurs dictées (distance, price) priment sur les défauts.
     // Sinon on tombe sur des estimations raisonnables (10 km, 20 min, 0 €).
     setFormInitial({
-      distance: 10,
       duration: 20,
-      price: 0,
       notes: "",
       type: "forfait",
       ...parsed,
       // Si l'utilisateur a dicté un prix, on le respecte. Sinon on laisse
       // 0 (le formulaire calculera l'estimation automatique).
+      // Idem pour la distance : 10 km par défaut.
       price: parsed.price ?? 0,
       distance: parsed.distance ?? 10,
     });
@@ -4248,6 +4279,28 @@ export default function App() {
   };
 
   // --- Routing ---
+  // Loading state pendant que getSession() + loadUserData() s'exécutent.
+  // Sans ça, l'utilisateur voit l'écran de bienvenue PENDANT que la session
+  // se restaure (~500ms à 2s) et clique impatient sur "Se connecter",
+  // déclenchant un signInWithPassword qui se met en concurrence avec
+  // getSession et provoque deadlock + double SIGNED_IN.
+  if (!authChecked) {
+    return (
+      <>
+        <GlobalStyles/>
+        <div className="tp-root">
+          <div className="tp-phone" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ textAlign: 'center', color: 'var(--text-dim)' }}>
+              <Loader2 size={32} style={{ animation: 'tp-spin 1s linear infinite', color: 'var(--accent)' }}/>
+              <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600, marginTop: 14, color: 'var(--text)' }}>TrajetPro</div>
+              <div style={{ fontSize: 12, marginTop: 4 }}>Chargement…</div>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   // Auth flow d'abord
   if (!isAuthenticated && authScreen) {
     return (
@@ -4302,7 +4355,7 @@ export default function App() {
     switch (tab) {
       case "home":
         screen = <HomeScreen bookings={bookings} invoices={invoices} tokenBalance={tokenBalance}
-          isGuest={isGuest}
+          isGuest={isGuest} currentUser={currentUser}
           onQuickVoice={onOpenVoice} onNewBooking={onNewBooking}
           onOpenBooking={setDetailBooking} onGoTab={setTab}
           onOpenPurchase={() => setPurchaseOpen(true)}

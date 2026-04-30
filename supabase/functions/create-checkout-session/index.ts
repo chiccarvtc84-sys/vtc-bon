@@ -45,34 +45,16 @@ function buildCorsHeaders(reqOrigin: string | null): Record<string, string> {
 
 // Catalogue figé côté serveur — la source de vérité pour les prix.
 // Doit rester synchronisé avec TOKEN_PACKAGES côté React.
+// priceIds mis à jour 2026-04-30 : produits créés dans le compte Stripe
+// utilisateur (acct_1TPbCh...) en mode Test.
 const PACKAGES: Record<
   string,
   { priceId: string; tokens: number; label: string; amountCents: number }
 > = {
-  pack20: {
-    priceId: "price_1TQuQWGYVtGQnVrZcnvDfEMJ",
-    tokens: 20,
-    label: "Pack Découverte",
-    amountCents: 200,
-  },
-  pack40: {
-    priceId: "price_1TQuQZGYVtGQnVrZO9EFBOg3",
-    tokens: 40,
-    label: "Pack Essentiel",
-    amountCents: 350,
-  },
-  pack50: {
-    priceId: "price_1TQuQcGYVtGQnVrZbp1H0jyi",
-    tokens: 50,
-    label: "Pack Confort",
-    amountCents: 400,
-  },
-  pack80: {
-    priceId: "price_1TQuQfGYVtGQnVrZzc62g6OX",
-    tokens: 80,
-    label: "Pack Pro",
-    amountCents: 500,
-  },
+  pack20: { priceId: "price_1TRqnaGbkiwQlw6ADATVkH6n", tokens: 20, label: "Pack Découverte", amountCents: 200 },
+  pack40: { priceId: "price_1TRqo3GbkiwQlw6A3tgTqL0X", tokens: 40, label: "Pack Essentiel", amountCents: 350 },
+  pack50: { priceId: "price_1TRqoIGbkiwQlw6AmCOFcZH8", tokens: 50, label: "Pack Confort", amountCents: 400 },
+  pack80: { priceId: "price_1TRqoTGbkiwQlw6AhPoifOH8", tokens: 80, label: "Pack Pro", amountCents: 500 },
 };
 
 // Rate limit en mémoire (best-effort, suffisant pour bloquer un abus basique).
@@ -191,10 +173,19 @@ Deno.serve(async (req: Request) => {
 
     return json({ sessionId: session.id, url: session.url }, 200);
   } catch (err) {
-    // Ne pas exposer les détails internes d'erreur côté client
+    // ⚠️ DEBUG : on retourne le détail Stripe au client pour diagnostiquer
+    // (à retirer / restreindre en prod stricte). Le message Stripe est
+    // généralement déjà destiné à être lisible par l'utilisateur final.
+    const e = err as { message?: string; code?: string; type?: string; statusCode?: number };
     console.error("create-checkout-session error:", err);
     return new Response(
-      JSON.stringify({ error: "Erreur interne lors de la création du paiement" }),
+      JSON.stringify({
+        error: "Erreur interne lors de la création du paiement",
+        detail: e?.message || String(err),
+        stripe_code: e?.code,
+        stripe_type: e?.type,
+        stripe_status: e?.statusCode,
+      }),
       { status: 500, headers: { ...cors, "Content-Type": "application/json" } },
     );
   }
