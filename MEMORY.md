@@ -2,18 +2,23 @@
 
 > Ce fichier capture l'état réel du projet, les décisions prises, les bugs en cours et les pièges à éviter. À lire AVANT toute nouvelle session de travail. Complète `CLAUDE.md` (mission) sans le dupliquer.
 >
-> **Dernière mise à jour : 2026-04-30 (auth + Stripe + parrainage + schema drifts — tous résolus)**
+> **Dernière mise à jour : 2026-04-30 (Stripe Live validé — premier vrai paiement réussi)**
 
 ---
 
 ## 🎯 État global en une phrase
 
-**Le code est livré ET les 3 flows critiques sont validés bout-en-bout en mode Test :**
-- ✅ **Stripe Checkout** : paiement 4€ → 50 crédits ajoutés (Pack Confort)
-- ✅ **Parrainage** : test@test.fr (parrain) → +10 crédits, chuntao@gmail.com (filleul) → +5 crédits
-- ✅ **Auth + F5** : session persistante, pas de spinner infini
+**TrajetPro encaisse de vrais clients.** Premier paiement Live validé bout-en-bout : 2 € prélevés sur la carte réelle, 20 crédits crédités automatiquement via le webhook Live (PaymentIntent `pi_3TRyujGbkiwQlw6A1urAbVoy`).
 
-Reste : bascule **Stripe Live mode** (produits + webhook + clé sk_live) + résolution longue des schema drifts résiduels.
+Tous les flows critiques validés en production :
+- ✅ **Stripe Live** : paiement 2 € (Pack Découverte) → +20 crédits, balance 68 → 88
+- ✅ **Stripe Test** (pour la régression) : 4 € → 50 crédits (Pack Confort, validé plus tôt)
+- ✅ **Parrainage** : parrain +10 / filleul +5 (validé manuellement après fix RPC)
+- ✅ **Auth + F5** : session persistante, pas de spinner infini, pas de fallback bidon
+- ✅ **Profil éditable** : modal de modif live (entreprise, véhicule, IBAN, etc.)
+- ✅ **Rappels avant course** : 8 offsets configurables (24h → 5min)
+
+Reste : finir les schema drifts résiduels (table `invoices` notamment), publier sur les stores (action humaine).
 
 ---
 
@@ -277,17 +282,31 @@ La colonne n'existe pas en prod. Le RPC ne l'incrémente plus. Si on veut affich
 
 Au début de la session, l'utilisateur a collé sa clé `sk_live_51TPbCh...` dans la conversation. Je lui ai demandé de la **régénérer** immédiatement (Roll key dans Stripe Dashboard). **Statut à reconfirmer** à la prochaine session : la clé compromise doit être inactive.
 
-### Bascule Live mode (à faire plus tard)
+### Bascule Live mode — ✅ EFFECTUÉE 2026-04-30
 
-Quand l'utilisateur voudra encaisser de vrais clients :
-1. Activer le compte Stripe en Live mode (validation business — compte déjà activé d'après son `sk_live_…` initial)
-2. Recréer les 4 produits **en mode Live** (mêmes tarifs)
-3. Récupérer les nouveaux `priceId` Live
-4. Mettre à jour les `priceId` dans `create-checkout-session/index.ts`
-5. Récupérer la `sk_live_…` dans Stripe Dashboard et la mettre dans Supabase `STRIPE_SECRET_KEY`
-6. Créer un webhook **Live** dans Stripe Dashboard → mettre son `whsec_…` dans Supabase `STRIPE_WEBHOOK_SECRET`
-7. Redéployer la fonction Edge `create-checkout-session`
-8. Tester avec une vraie carte (pack à 2€)
+**État actuel** : Live mode actif. Tous les paiements via l'app vont sur la vraie banque.
+
+priceIds Live actifs (compte utilisateur `acct_1TPbCh...`) :
+| Pack | priceId Live | Montant |
+|---|---|---|
+| pack20 (Découverte) | `price_1TRbSXGbkiwQlw6ArEmIHC2N` | 2,00 € |
+| pack40 (Essentiel) | `price_1TRbSXGbkiwQlw6AetDlzM9a` | 3,50 € |
+| pack50 (Confort) | `price_1TRbSWGbkiwQlw6A9xo37B38` | 4,00 € |
+| pack80 (Pro) | `price_1TRbSVGbkiwQlw6ABNmVGjj8` | 5,00 € |
+
+Webhook Live actif → pointe sur `https://olmhckwethdcxhvsrfie.supabase.co/functions/v1/stripe-webhook`, écoute `checkout.session.completed` + `payment_intent.payment_failed`.
+
+Edge Function `create-checkout-session` : version 12 ACTIVE.
+
+Pour rollback Test mode (en cas d'urgence) :
+1. Dans Supabase secrets → remettre `STRIPE_SECRET_KEY` = `sk_test_…` et `STRIPE_WEBHOOK_SECRET` = `whsec_…` test
+2. Dans `create-checkout-session/index.ts` → décommenter le bloc Test priceIds (gardé en commentaire) et redéployer
+
+priceIds Test (rollback) :
+- pack20 : `price_1TRqnaGbkiwQlw6ADATVkH6n`
+- pack40 : `price_1TRqo3GbkiwQlw6A3tgTqL0X`
+- pack50 : `price_1TRqoIGbkiwQlw6AmCOFcZH8`
+- pack80 : `price_1TRqoTGbkiwQlw6AhPoifOH8`
 
 ---
 
