@@ -439,6 +439,42 @@ export async function purchaseTokensDev(userId, { packageId, tokens, priceTTC })
 }
 
 /**
+ * Met à jour le profil utilisateur (champs métier éditables).
+ * RLS `users_update_own` garantit que seul l'utilisateur peut modifier
+ * sa propre ligne. Les champs auth-managés (email, password) sont gérés
+ * via supabase.auth.updateUser séparément.
+ *
+ * @param {string} userId - UUID de l'utilisateur
+ * @param {object} updates - clés DB (snake_case) à mettre à jour
+ * @returns {Promise<object>} la ligne mise à jour
+ */
+export async function updateUserProfile(userId, updates) {
+  if (!userId) throw new Error('userId manquant');
+  // Whitelist : on n'autorise que les champs éditables côté UI.
+  // Évite qu'un attaquant envoie token_balance=99999 par ex.
+  const allowed = [
+    'name', 'phone', 'company_name', 'evtc_number',
+    'pro_card_number', 'vehicle_model', 'vehicle_plate',
+    'iban', 'vat_intra',
+  ];
+  const sanitized = {};
+  for (const k of allowed) {
+    if (k in updates) sanitized[k] = updates[k];
+  }
+  sanitized.updated_at = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from('users')
+    .update(sanitized)
+    .eq('id', userId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
  * Cherche un utilisateur par son code de parrainage (utilisé au signup
  * pour valider que le code existe avant de tenter le crédit).
  *

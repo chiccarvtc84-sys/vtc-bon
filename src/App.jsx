@@ -31,6 +31,7 @@ import {
   purchaseTokensDev,
   findUserByReferralCode,
   creditReferralBonus,
+  updateUserProfile,
   createCheckoutSession,
   findPurchaseBySessionId,
   verifySiret as sbVerifySiret,
@@ -2195,17 +2196,180 @@ function InsufficientModal({ open, onClose, onBuy, action, currentBalance }) {
 /* -------------------------------------------------------------------------
    PROFILE SCREEN
    ------------------------------------------------------------------------- */
-function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, onPromptSignup }) {
+// ----------------------------------------------------------------------------
+// EditProfileModal — édition des champs métier du chauffeur
+// ----------------------------------------------------------------------------
+// Permet de modifier : nom, téléphone, entreprise, n° VTC, carte pro,
+// véhicule, IBAN, n° TVA intra. Le SIRET et l'email ne sont PAS éditables
+// ici (le SIRET est unique anti-fraude → demande de re-vérif INSEE ; l'email
+// passe par un flow auth séparé).
+function EditProfileModal({ open, currentUser, onClose, onSave }) {
+  const [form, setForm] = useState({
+    name: "", phone: "", companyName: "", evtcNumber: "",
+    proCardNumber: "", vehicleModel: "", vehiclePlate: "",
+    iban: "", vatIntra: "",
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  // Pré-remplir avec les valeurs actuelles à chaque ouverture
+  useEffect(() => {
+    if (open && currentUser) {
+      setForm({
+        name: currentUser.name || "",
+        phone: currentUser.phone || "",
+        companyName: currentUser.companyName || "",
+        evtcNumber: currentUser.evtcNumber || "",
+        proCardNumber: currentUser.proCardNumber || "",
+        vehicleModel: currentUser.vehicleModel || "",
+        vehiclePlate: currentUser.vehiclePlate || "",
+        iban: currentUser.iban || "",
+        vatIntra: currentUser.vatIntra || "",
+      });
+      setError("");
+      setLoading(false);
+    }
+  }, [open, currentUser]);
+
+  const update = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const handleSubmit = async () => {
+    setError("");
+    if (!form.name.trim()) { setError("Le nom est requis"); return; }
+    if (form.phone.trim() && !isValidPhone(form.phone)) {
+      setError("Numéro de téléphone français invalide (ex : +33 6 12 34 56 78)");
+      return;
+    }
+    setLoading(true);
+    try {
+      await onSave({
+        name: form.name.trim(),
+        phone: form.phone.trim() || null,
+        company_name: form.companyName.trim() || null,
+        evtc_number: form.evtcNumber.trim().toUpperCase() || null,
+        pro_card_number: form.proCardNumber.trim().toUpperCase() || null,
+        vehicle_model: form.vehicleModel.trim() || null,
+        vehicle_plate: form.vehiclePlate.trim().toUpperCase() || null,
+        iban: form.iban.replace(/\s/g, "").toUpperCase() || null,
+        vat_intra: form.vatIntra.trim().toUpperCase() || null,
+      });
+      onClose();
+    } catch (e) {
+      setError(e?.message || "Erreur lors de l'enregistrement");
+      setLoading(false);
+    }
+  };
+
+  if (!open) return null;
+
+  const fieldStyle = { marginBottom: 14 };
+  const labelStyle = { fontSize: 11, color: "var(--text-dim)", fontWeight: 600, marginBottom: 6, letterSpacing: "0.5px", textTransform: "uppercase" };
+
+  return (
+    <div className="tp-overlay" onClick={onClose}>
+      <div className="tp-sheet" onClick={(e) => e.stopPropagation()} style={{ maxHeight: "90vh", overflowY: "auto" }}>
+        <div className="tp-grab"/>
+        <div style={{ padding: "16px 20px 28px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div>
+              <div className="tp-serif" style={{ fontSize: 22, fontWeight: 600 }}>Modifier mes infos</div>
+              <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>
+                Mettez à jour vos coordonnées pro
+              </div>
+            </div>
+            <button onClick={onClose} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }}><X size={18}/></button>
+          </div>
+
+          <div style={fieldStyle}>
+            <div style={labelStyle}>Nom complet</div>
+            <input className="tp-input" value={form.name} onChange={e => update("name", e.target.value)} placeholder="Jean Dupont"/>
+          </div>
+
+          <div style={fieldStyle}>
+            <div style={labelStyle}>Téléphone</div>
+            <input className="tp-input" value={form.phone} onChange={e => update("phone", e.target.value)} placeholder="+33 6 12 34 56 78"/>
+          </div>
+
+          <div style={fieldStyle}>
+            <div style={labelStyle}>Mon entreprise</div>
+            <input className="tp-input" value={form.companyName} onChange={e => update("companyName", e.target.value)} placeholder="TrajetPro Services"/>
+          </div>
+
+          <div style={fieldStyle}>
+            <div style={labelStyle}>N° d'inscription VTC</div>
+            <input className="tp-input" value={form.evtcNumber} onChange={e => update("evtcNumber", e.target.value.toUpperCase())} placeholder="EVTC084220001"/>
+          </div>
+
+          <div style={fieldStyle}>
+            <div style={labelStyle}>Carte professionnelle</div>
+            <input className="tp-input" value={form.proCardNumber} onChange={e => update("proCardNumber", e.target.value.toUpperCase())} placeholder="VTC-84-2024-0428"/>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, ...fieldStyle }}>
+            <div style={{ flex: 2 }}>
+              <div style={labelStyle}>Modèle véhicule</div>
+              <input className="tp-input" value={form.vehicleModel} onChange={e => update("vehicleModel", e.target.value)} placeholder="Mercedes Classe E"/>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={labelStyle}>Plaque</div>
+              <input className="tp-input" value={form.vehiclePlate} onChange={e => update("vehiclePlate", e.target.value.toUpperCase())} placeholder="GT-482-AV"/>
+            </div>
+          </div>
+
+          <div style={fieldStyle}>
+            <div style={labelStyle}>IBAN (pour les factures)</div>
+            <input className="tp-input" value={form.iban} onChange={e => update("iban", e.target.value.toUpperCase())} placeholder="FR76 …"/>
+          </div>
+
+          <div style={fieldStyle}>
+            <div style={labelStyle}>N° TVA intracommunautaire (optionnel)</div>
+            <input className="tp-input" value={form.vatIntra} onChange={e => update("vatIntra", e.target.value.toUpperCase())} placeholder="FR12345678901"/>
+          </div>
+
+          <div className="tp-card" style={{ padding: 12, marginBottom: 16, background: "var(--surface)", borderColor: "rgba(255,255,255,0.06)" }}>
+            <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
+              <Info size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 6, color: "var(--accent)" }}/>
+              Le <b>SIRET</b> et l'<b>email</b> ne sont pas modifiables ici — contactez le support pour les changer (vérification INSEE / email obligatoire).
+            </div>
+          </div>
+
+          {error && (
+            <div className="tp-card" style={{ padding: 10, marginBottom: 14, background: "var(--error-soft)", borderColor: "rgba(248,113,113,0.3)", fontSize: 12, color: "var(--error)", display: "flex", alignItems: "flex-start", gap: 8, lineHeight: 1.5 }}>
+              <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }}/>
+              <span>{error}</span>
+            </div>
+          )}
+
+          <button onClick={handleSubmit} disabled={loading} className="tp-btn tp-btn-primary" style={{ width: "100%", padding: 14, fontSize: 15 }}>
+            {loading
+              ? <><Loader2 size={16} style={{ animation: "tp-spin 1s linear infinite" }}/> Enregistrement…</>
+              : <><Check size={16}/> Enregistrer les modifications</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, onPromptSignup, onEditProfile }) {
   const lowTokens = tokenBalance <= 3;
   const displayName = currentUser?.name || `${DRIVER_PROFILE.firstName} ${DRIVER_PROFILE.lastName}`;
   const displayEmail = currentUser?.email || DRIVER_PROFILE.email;
+  // Lit les valeurs du profil DB (currentUser), avec un fallback sur les
+  // constantes DRIVER_PROFILE si le champ est vide (utile pour l'expérience
+  // démo en mode invité ou compte fraîchement créé sans données pro saisies).
+  const fb = (val, fallback) => (val && String(val).trim() ? val : fallback);
+  const vehicle = [
+    fb(currentUser?.vehicleModel, DRIVER_PROFILE.vehicleModel),
+    fb(currentUser?.vehiclePlate, DRIVER_PROFILE.vehiclePlate),
+  ].filter(Boolean).join(" · ");
   const items = [
-    { icon: Building2, label: "Mon entreprise", value: DRIVER_PROFILE.companyName },
-    { icon: FileCheck, label: "N° SIRET", value: DRIVER_PROFILE.siret },
-    { icon: Shield, label: "Inscription VTC", value: DRIVER_PROFILE.vtcNumber },
-    { icon: CreditCard, label: "Carte pro.", value: DRIVER_PROFILE.proCardNumber },
-    { icon: Car, label: "Véhicule", value: `${DRIVER_PROFILE.vehicleModel} · ${DRIVER_PROFILE.vehiclePlate}` },
-    { icon: Phone, label: "Téléphone", value: DRIVER_PROFILE.phone },
+    { icon: Building2, label: "Mon entreprise", value: fb(currentUser?.companyName, DRIVER_PROFILE.companyName) },
+    { icon: FileCheck, label: "N° SIRET", value: fb(currentUser?.siret, DRIVER_PROFILE.siret) },
+    { icon: Shield, label: "Inscription VTC", value: fb(currentUser?.evtcNumber, DRIVER_PROFILE.vtcNumber) },
+    { icon: CreditCard, label: "Carte pro.", value: fb(currentUser?.proCardNumber, DRIVER_PROFILE.proCardNumber) },
+    { icon: Car, label: "Véhicule", value: vehicle || "—" },
+    { icon: Phone, label: "Téléphone", value: fb(currentUser?.phone, DRIVER_PROFILE.phone) },
     { icon: Mail, label: "Email", value: displayEmail },
   ];
 
@@ -2346,6 +2510,15 @@ function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, 
               </div>
             </div>
             <ChevronRight size={14} style={{ color: "var(--muted)" }}/>
+          </button>
+        </div>
+      )}
+
+      {!isGuest && onEditProfile && (
+        <div style={{ padding: "0 20px 12px" }}>
+          <button onClick={onEditProfile} className="tp-btn tp-btn-ghost"
+            style={{ width: "100%", padding: 12, fontSize: 13, fontWeight: 600, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            <Edit3 size={14}/> Modifier mes informations
           </button>
         </div>
       )}
@@ -3619,19 +3792,28 @@ function profileFromDb(row) {
     name: row.name,
     phone: row.phone || "",
     siret: row.siret,
+    // Champs métier éditables — vrai contenu DB, plus DRIVER_PROFILE
+    companyName: row.company_name || "",
+    evtcNumber: row.evtc_number || "",
+    proCardNumber: row.pro_card_number || "",
+    vehicleModel: row.vehicle_model || "",
+    vehiclePlate: row.vehicle_plate || "",
+    iban: row.iban || "",
+    vatIntra: row.vat_intra || "",
+    // Parrainage / vérifs
     referralCode: row.referral_code,
     referredBy: row.referred_by,
     createdAt: row.created_at,
     lastMonthlyBonus: row.last_monthly_bonus_at,
     referralStats: {
       invitedCount: row.referrals_count || 0,
-      tokensEarned: 0,    // calculé séparément si besoin
+      tokensEarned: 0,
       friends: [],
     },
     phoneVerified: false,
     emailVerified: !!row.email_verified,
     siretVerified: !!row.siret_verified,
-    vtcLicenseVerified: false,
+    vtcLicenseVerified: !!row.evtc_verified,
     deviceFingerprint: row.device_fingerprint,
     deviceRegisteredAt: row.created_at,
     riskScore: row.risk_score || 0,
@@ -3681,6 +3863,7 @@ export default function App() {
   const [detailBooking, setDetailBooking] = useState(null);
   const [detailInvoice, setDetailInvoice] = useState(null);
   const [purchaseOpen, setPurchaseOpen] = useState(false);
+  const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [purchaseDetail, setPurchaseDetail] = useState(null);
   const [insufficientOpen, setInsufficientOpen] = useState(false);
   const [pendingActionLabel, setPendingActionLabel] = useState("");
@@ -4391,7 +4574,8 @@ export default function App() {
       case "profile":
         screen = <ProfileScreen onGoTab={setTab} tokenBalance={tokenBalance}
           currentUser={currentUser} isGuest={isGuest}
-          onLogout={onLogout} onPromptSignup={onPromptSignup}/>;
+          onLogout={onLogout} onPromptSignup={onPromptSignup}
+          onEditProfile={() => setProfileEditOpen(true)}/>;
         break;
       default:
         screen = null;
@@ -4423,6 +4607,15 @@ export default function App() {
           <VoiceCapture open={voiceOpen} onClose={() => setVoiceOpen(false)} onConfirm={onVoiceConfirm}/>
           <PurchaseModal open={purchaseOpen} onClose={() => setPurchaseOpen(false)} onConfirm={onPurchaseConfirm}/>
           <PurchaseDetailModal open={!!purchaseDetail} purchase={purchaseDetail} onClose={() => setPurchaseDetail(null)}/>
+          <EditProfileModal
+            open={profileEditOpen}
+            currentUser={currentUser}
+            onClose={() => setProfileEditOpen(false)}
+            onSave={async (updates) => {
+              const updatedRow = await updateUserProfile(currentUser.id, updates);
+              setCurrentUser(profileFromDb(updatedRow));
+            }}
+          />
           <InsufficientModal
             open={insufficientOpen}
             onClose={() => setInsufficientOpen(false)}
