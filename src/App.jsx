@@ -191,6 +191,16 @@ const maskPhone = (phone = "") => {
   return phone.slice(0, 6) + " ** ** ** " + clean.slice(-2);
 };
 
+// Valide un numéro de téléphone français (mobile ou fixe).
+// Accepte +33, 0033 ou 0 en tête, suivi de 9 chiffres dont le 1er est 1-9.
+// Tolère les espaces et les points de séparation.
+// Une chaîne vide ou null est considérée valide (champ optionnel).
+const isValidPhone = (phone) => {
+  if (!phone) return true;
+  const clean = String(phone).replace(/[^\d+]/g, "");
+  return /^(?:\+33|0033|0)[1-9]\d{8}$/.test(clean);
+};
+
 // Génère un code de parrainage unique basé sur le nom
 const generateReferralCode = (name = "") => {
   const prefix = (name || "TRP").replace(/[^A-Za-z]/g, "").substring(0, 3).toUpperCase() || "TRP";
