@@ -45,16 +45,23 @@ function buildCorsHeaders(reqOrigin: string | null): Record<string, string> {
 
 // Catalogue figé côté serveur — la source de vérité pour les prix.
 // Doit rester synchronisé avec TOKEN_PACKAGES côté React.
-// priceIds mis à jour 2026-04-30 : produits créés dans le compte Stripe
-// utilisateur (acct_1TPbCh...) en mode Test.
+// priceIds Live : produits créés dans le compte Stripe utilisateur en mode Live.
+// Bascule effectuée 2026-04-30. Les anciens IDs Test sont conservés en
+// commentaire ci-dessous pour rollback rapide si besoin.
+//
+// Test mode (rollback) :
+//   pack20: price_1TRqnaGbkiwQlw6ADATVkH6n
+//   pack40: price_1TRqo3GbkiwQlw6A3tgTqL0X
+//   pack50: price_1TRqoIGbkiwQlw6AmCOFcZH8
+//   pack80: price_1TRqoTGbkiwQlw6AhPoifOH8
 const PACKAGES: Record<
   string,
   { priceId: string; tokens: number; label: string; amountCents: number }
 > = {
-  pack20: { priceId: "price_1TRqnaGbkiwQlw6ADATVkH6n", tokens: 20, label: "Pack Découverte", amountCents: 200 },
-  pack40: { priceId: "price_1TRqo3GbkiwQlw6A3tgTqL0X", tokens: 40, label: "Pack Essentiel", amountCents: 350 },
-  pack50: { priceId: "price_1TRqoIGbkiwQlw6AmCOFcZH8", tokens: 50, label: "Pack Confort", amountCents: 400 },
-  pack80: { priceId: "price_1TRqoTGbkiwQlw6AhPoifOH8", tokens: 80, label: "Pack Pro", amountCents: 500 },
+  pack20: { priceId: "price_1TRbSXGbkiwQlw6ArEmIHC2N", tokens: 20, label: "Pack Découverte", amountCents: 200 },
+  pack40: { priceId: "price_1TRbSXGbkiwQlw6AetDlzM9a", tokens: 40, label: "Pack Essentiel", amountCents: 350 },
+  pack50: { priceId: "price_1TRbSWGbkiwQlw6A9xo37B38", tokens: 50, label: "Pack Confort", amountCents: 400 },
+  pack80: { priceId: "price_1TRbSVGbkiwQlw6ABNmVGjj8", tokens: 80, label: "Pack Pro", amountCents: 500 },
 };
 
 // Rate limit en mémoire (best-effort, suffisant pour bloquer un abus basique).
