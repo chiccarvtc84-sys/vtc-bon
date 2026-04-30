@@ -441,20 +441,23 @@ export async function purchaseTokensDev(userId, { packageId, tokens, priceTTC })
 /**
  * Cherche un utilisateur par son code de parrainage (utilisé au signup
  * pour valider que le code existe avant de tenter le crédit).
+ *
+ * Utilise la RPC `lookup_referral_code` (SECURITY DEFINER) car la table
+ * `users` a une policy RLS qui n'autorise que la lecture de sa propre
+ * ligne — donc un SELECT direct depuis le client (a fortiori pendant
+ * le signup où l'utilisateur n'est pas encore authentifié) retournerait
+ * toujours `null` même pour un code valide.
  */
 export async function findUserByReferralCode(code) {
   if (!code) return null;
-  const { data, error } = await supabase
-    .from('users')
-    .select('id, name, referral_code')
-    .eq('referral_code', code.toUpperCase())
-    .maybeSingle();
-
+  const { data, error } = await supabase.rpc('lookup_referral_code', { p_code: code });
   if (error) {
     console.warn('Erreur lookup referral code:', error);
     return null;
   }
-  return data;
+  // La RPC retourne TABLE → tableau de rows. On prend la 1re ou null.
+  if (!Array.isArray(data) || data.length === 0) return null;
+  return data[0]; // { id, name }
 }
 
 /**
