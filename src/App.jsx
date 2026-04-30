@@ -45,6 +45,7 @@ import {
   scheduleBookingReminders,
   cancelBookingReminders,
   rescheduleAllBookings,
+  ALL_REMINDER_OFFSETS,
 } from './lib/notifications.js';
 
 /* -------------------------------------------------------------------------
@@ -3430,6 +3431,58 @@ function SettingsScreen({ onBack, preferences, onChangePref }) {
           </div>
         ))}
 
+        {/* Sélecteur multi-checkbox des rappels avant course.
+            Visible uniquement si "Rappel de courses" est activé. */}
+        <div style={{ opacity: preferences.notifRides ? 1 : 0.5, pointerEvents: preferences.notifRides ? "auto" : "none" }}>
+          <div className="tp-label" style={{ marginBottom: 8, padding: "0 2px" }}>Quand recevoir les rappels</div>
+          <div style={{ fontSize: 11, color: "var(--text-dim)", padding: "0 2px 8px", lineHeight: 1.5 }}>
+            Cochez les délais où vous voulez être prévenu avant une course. {!preferences.notifRides && <em>(Activez d'abord "Rappel de courses" ci-dessus.)</em>}
+          </div>
+          <div className="tp-card" style={{ background: "var(--surface)", overflow: "hidden" }}>
+            {ALL_REMINDER_OFFSETS.map((off, i, arr) => {
+              const checked = (preferences.reminderOffsets || []).includes(off.key);
+              const isLast = i === arr.length - 1;
+              return (
+                <button key={off.key}
+                  onClick={() => {
+                    const current = preferences.reminderOffsets || [];
+                    const next = checked
+                      ? current.filter(k => k !== off.key)
+                      : [...current, off.key];
+                    onChangePref('reminderOffsets', next);
+                  }}
+                  style={{
+                    width: "100%", padding: "14px 16px", display: "flex", alignItems: "center", gap: 12,
+                    borderBottom: isLast ? "none" : "1px solid var(--border)",
+                    background: "transparent", border: "none", cursor: "pointer", textAlign: "left",
+                  }}>
+                  <div style={{
+                    width: 22, height: 22, borderRadius: 11,
+                    border: checked ? "2px solid var(--accent)" : "2px solid var(--text-dim)",
+                    background: checked ? "var(--accent)" : "transparent",
+                    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                  }}>
+                    {checked && <Check size={12} color="#0B0B0D" strokeWidth={3}/>}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: checked ? 600 : 500, color: checked ? "var(--text)" : "var(--text-dim)" }}>
+                      {off.label}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          {preferences.notifRides && (preferences.reminderOffsets || []).length === 0 && (
+            <div className="tp-card" style={{ padding: 10, marginTop: 8, background: "var(--warn-soft, rgba(251,191,36,0.1))", borderColor: "rgba(251,191,36,0.3)" }}>
+              <div style={{ fontSize: 11, color: "var(--warn, #fbbf24)", display: "flex", alignItems: "flex-start", gap: 6, lineHeight: 1.5 }}>
+                <AlertCircle size={12} style={{ flexShrink: 0, marginTop: 1 }}/>
+                <span>Aucun rappel sélectionné — vous ne recevrez aucune notification avant vos courses.</span>
+              </div>
+            </div>
+          )}
+        </div>
+
         <div className="tp-card" style={{ padding: 14, background: "var(--surface)", display: "flex", gap: 10 }}>
           <Database size={16} style={{ color: "var(--text-dim)", flexShrink: 0, marginTop: 2 }}/>
           <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.6 }}>
@@ -3743,6 +3796,9 @@ function NavItem({ icon: Icon, label, active, onClick, badge, badgeColor }) {
 const DEFAULT_PREFERENCES = {
   language: "fr", currency: "EUR", theme: "dark",
   notifRides: true, notifInvoices: true, notifMarketing: false,
+  // Quand recevoir les rappels avant une course (offsets sélectionnés
+  // depuis ALL_REMINDER_OFFSETS dans notifications.js).
+  reminderOffsets: ['T3h', 'T1h', 'T15m'],
   vatRate: 10, autoNumbering: true,
   biometric: true, autoBackup: true,
 };
@@ -3925,10 +3981,13 @@ export default function App() {
       const t = new Date(b.dateTime);
       return t.getTime() > Date.now() && b.status !== 'cancelled' && b.status !== 'completed';
     });
-    rescheduleAllBookings(upcoming, { enabled: !!preferences.notifRides })
+    rescheduleAllBookings(upcoming, {
+      enabled: !!preferences.notifRides,
+      selectedKeys: preferences.reminderOffsets,
+    })
       .catch((e) => console.warn('reschedule on prefs change:', e?.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preferences.notifRides]);
+  }, [preferences.notifRides, preferences.reminderOffsets]);
 
   // --- Chargement des données utilisateur depuis Supabase ---
   // Appelé après login (ou au reload si la session existait déjà).
@@ -4019,7 +4078,7 @@ export default function App() {
                 const t = new Date(b.dateTime);
                 return t.getTime() > Date.now() && b.status !== 'cancelled' && b.status !== 'completed';
               }),
-              { enabled: true },
+              { enabled: true, selectedKeys: preferences.reminderOffsets },
             );
           }
         }
@@ -4361,7 +4420,7 @@ export default function App() {
         // Programme les rappels (T-3h, T-1h, T-15m) si l'utilisateur le veut.
         if (preferences.notifRides) {
           ensureNotificationPermission()
-            .then((granted) => granted && scheduleBookingReminders(formatted))
+            .then((granted) => granted && scheduleBookingReminders(formatted, { selectedKeys: preferences.reminderOffsets }))
             .catch((e) => console.warn('schedule:', e?.message));
         }
       } else {
@@ -4369,7 +4428,8 @@ export default function App() {
         setBookings(prev => prev.map(p => p.id === b.id ? b : p));
         // L'heure ou le client a peut-être changé : on annule + replanifie.
         if (preferences.notifRides) {
-          scheduleBookingReminders(b).catch((e) => console.warn('reschedule:', e?.message));
+          scheduleBookingReminders(b, { selectedKeys: preferences.reminderOffsets })
+            .catch((e) => console.warn('reschedule:', e?.message));
         } else {
           cancelBookingReminders(b.id).catch(() => {});
         }

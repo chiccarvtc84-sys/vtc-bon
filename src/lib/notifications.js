@@ -20,12 +20,42 @@
 
 import { isNativePlatform } from './platform.js';
 
-// Offsets en minutes avant l'heure de pickup
-export const REMINDER_OFFSETS = [
-  { minutes: 180, key: 'T3h',   title: '🚗 Course prévue dans 3 heures', body: (b) => `Prise en charge ${b.customerName} à ${b.pickupAddress} → ${b.dropoffAddress} à ${b.timeShort}` },
-  { minutes: 60,  key: 'T1h',   title: '🚗 Prise en charge dans 1 heure', body: (b) => `${b.customerName} • ${b.pickupAddress} → ${b.dropoffAddress} • ${b.timeShort}` },
-  { minutes: 15,  key: 'T15m',  title: '⏰ Course imminente — 15 min',     body: (b) => `${b.customerName} t'attend à ${b.pickupAddress}` },
+// Catalogue complet des offsets disponibles dans les préférences.
+// `key` = identifiant stable (utilisé en DB et en mémoire pour matcher
+// les choix utilisateur). `minutes` = nombre de minutes avant le pickup.
+// `label` = libellé court pour l'UI Settings. `title`/`body` = contenu de
+// la notif (peut référencer le contexte du booking via `b`).
+export const ALL_REMINDER_OFFSETS = [
+  { minutes: 1440, key: 'T24h', label: '24 heures avant',
+    title: '🚗 Course prévue demain', body: (b) => `${b.customerName} • ${b.pickupAddress} → ${b.dropoffAddress} • ${b.timeShort}` },
+  { minutes: 720,  key: 'T12h', label: '12 heures avant',
+    title: '🚗 Course prévue dans 12 heures', body: (b) => `${b.customerName} • ${b.pickupAddress} → ${b.dropoffAddress} • ${b.timeShort}` },
+  { minutes: 360,  key: 'T6h',  label: '6 heures avant',
+    title: '🚗 Course prévue dans 6 heures', body: (b) => `${b.customerName} • ${b.pickupAddress} → ${b.dropoffAddress} • ${b.timeShort}` },
+  { minutes: 180,  key: 'T3h',  label: '3 heures avant',
+    title: '🚗 Course prévue dans 3 heures', body: (b) => `Prise en charge ${b.customerName} à ${b.pickupAddress} → ${b.dropoffAddress} à ${b.timeShort}` },
+  { minutes: 60,   key: 'T1h',  label: '1 heure avant',
+    title: '🚗 Prise en charge dans 1 heure', body: (b) => `${b.customerName} • ${b.pickupAddress} → ${b.dropoffAddress} • ${b.timeShort}` },
+  { minutes: 30,   key: 'T30m', label: '30 minutes avant',
+    title: '⏰ Course imminente — 30 min', body: (b) => `${b.customerName} • ${b.pickupAddress} → ${b.dropoffAddress}` },
+  { minutes: 15,   key: 'T15m', label: '15 minutes avant',
+    title: '⏰ Course imminente — 15 min', body: (b) => `${b.customerName} t'attend à ${b.pickupAddress}` },
+  { minutes: 5,    key: 'T5m',  label: '5 minutes avant',
+    title: '🚨 Course dans 5 minutes', body: (b) => `${b.customerName} • ${b.pickupAddress}` },
 ];
+
+// Sélection par défaut si l'utilisateur n'a jamais réglé ses préférences.
+export const DEFAULT_REMINDER_KEYS = ['T3h', 'T1h', 'T15m'];
+
+// Helper : retourne les offsets sélectionnés, dans l'ordre du catalogue
+// (du plus loin au plus proche).
+function selectedOffsets(selectedKeys) {
+  const set = new Set(selectedKeys && selectedKeys.length ? selectedKeys : DEFAULT_REMINDER_KEYS);
+  return ALL_REMINDER_OFFSETS.filter((o) => set.has(o.key));
+}
+
+// Compat : ancien export. Conservé au cas où du code externe l'importe.
+export const REMINDER_OFFSETS = ALL_REMINDER_OFFSETS.filter((o) => DEFAULT_REMINDER_KEYS.includes(o.key));
 
 const CHANNEL_ID = 'trajetpro-rides';
 
@@ -42,15 +72,12 @@ function hashStringToInt32(str) {
   return (h & 0x7fffffff) || 1;
 }
 
-function notificationIdsFor(bookingId) {
+// Génère `count` IDs de notification stables pour ce booking.
+// On multiplie par 16 (au lieu de 10) pour avoir de la marge si on
+// ajoute plus d'offsets dans le catalogue.
+function notificationIdsFor(bookingId, count = ALL_REMINDER_OFFSETS.length) {
   const base = hashStringToInt32(String(bookingId));
-  // 3 IDs séparés (suffix 0/1/2) pour les 3 rappels
-  // On garde une marge en multipliant par 10 pour éviter les collisions
-  return [
-    (base * 10 + 0) & 0x7fffffff,
-    (base * 10 + 1) & 0x7fffffff,
-    (base * 10 + 2) & 0x7fffffff,
-  ];
+  return Array.from({ length: count }, (_, i) => (base * 16 + i) & 0x7fffffff);
 }
 
 // ----------------------------------------------------------------------------
@@ -119,12 +146,14 @@ function clearWebTimers(bookingId) {
 }
 
 /**
- * Programme les 3 rappels d'un bon de course.
+ * Programme les rappels d'un bon de course.
  * @param booking : { id, customerName, pickupAddress, dropoffAddress, dateTime }
  *   où dateTime est ISO ("2026-04-28T15:00") ou Date.
+ * @param options.selectedKeys : tableau des keys d'offsets à programmer.
+ *   Ex : ['T3h', 'T1h', 'T15m']. Si non fourni → DEFAULT_REMINDER_KEYS.
  * @returns { scheduled: number, skipped: number, reasons: string[] }
  */
-export async function scheduleBookingReminders(booking) {
+export async function scheduleBookingReminders(booking, { selectedKeys } = {}) {
   const out = { scheduled: 0, skipped: 0, reasons: [] };
   if (!booking?.id || !booking?.dateTime) {
     out.reasons.push('booking.id ou booking.dateTime manquant');
@@ -139,8 +168,14 @@ export async function scheduleBookingReminders(booking) {
     return out;
   }
 
+  const offsetsToUse = selectedOffsets(selectedKeys);
+  if (offsetsToUse.length === 0) {
+    out.reasons.push('Aucun offset sélectionné');
+    return out;
+  }
+
   const now = Date.now();
-  const ids = notificationIdsFor(booking.id);
+  const ids = notificationIdsFor(booking.id, offsetsToUse.length);
 
   // Données passées au callback "body" (formatage humain)
   const ctx = {
@@ -157,7 +192,7 @@ export async function scheduleBookingReminders(booking) {
     await ensureChannel();
     const { LocalNotifications } = await import('@capacitor/local-notifications');
     const toSchedule = [];
-    REMINDER_OFFSETS.forEach((r, idx) => {
+    offsetsToUse.forEach((r, idx) => {
       const at = new Date(pickupAt.getTime() - r.minutes * 60 * 1000);
       if (at.getTime() <= now + 5_000) {
         out.skipped++;
@@ -195,7 +230,7 @@ export async function scheduleBookingReminders(booking) {
     return out;
   }
   const timers = [];
-  REMINDER_OFFSETS.forEach((r) => {
+  offsetsToUse.forEach((r) => {
     const at = pickupAt.getTime() - r.minutes * 60 * 1000;
     const delay = at - now;
     if (delay <= 0) {
@@ -255,7 +290,7 @@ export async function cancelBookingReminders(bookingId) {
  * éviter les rappels orphelins de bookings supprimés depuis), puis on
  * replanifie.
  */
-export async function rescheduleAllBookings(bookings, { enabled = true } = {}) {
+export async function rescheduleAllBookings(bookings, { enabled = true, selectedKeys } = {}) {
   if (isNativePlatform()) {
     try {
       const { LocalNotifications } = await import('@capacitor/local-notifications');
@@ -273,7 +308,7 @@ export async function rescheduleAllBookings(bookings, { enabled = true } = {}) {
   let scheduled = 0;
   let skipped = 0;
   for (const b of bookings || []) {
-    const r = await scheduleBookingReminders(b);
+    const r = await scheduleBookingReminders(b, { selectedKeys });
     scheduled += r.scheduled;
     skipped += r.skipped;
   }
