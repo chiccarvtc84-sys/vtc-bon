@@ -2,15 +2,18 @@
 
 > Ce fichier capture l'état réel du projet, les décisions prises, les bugs en cours et les pièges à éviter. À lire AVANT toute nouvelle session de travail. Complète `CLAUDE.md` (mission) sans le dupliquer.
 >
-> **Dernière mise à jour : 2026-04-30 (session debug auth + Stripe — résolus)**
+> **Dernière mise à jour : 2026-04-30 (auth + Stripe + parrainage + schema drifts — tous résolus)**
 
 ---
 
 ## 🎯 État global en une phrase
 
-**Le code est livré ET le flow Stripe est validé bout-en-bout en mode Test.** Le compte `test@test.fr` est passé de 10 à 60 crédits suite à un paiement réel via Stripe Checkout (Pack Confort 4€ → +50 crédits). Tout marche : auth, F5, login, paiement, webhook, crédit en base.
+**Le code est livré ET les 3 flows critiques sont validés bout-en-bout en mode Test :**
+- ✅ **Stripe Checkout** : paiement 4€ → 50 crédits ajoutés (Pack Confort)
+- ✅ **Parrainage** : test@test.fr (parrain) → +10 crédits, chuntao@gmail.com (filleul) → +5 crédits
+- ✅ **Auth + F5** : session persistante, pas de spinner infini
 
-Reste : la bascule vers Stripe **Live mode** (création des produits Live + webhook Live + clé sk_live dans secrets) quand l'utilisateur sera prêt.
+Reste : bascule **Stripe Live mode** (produits + webhook + clé sk_live) + résolution longue des schema drifts résiduels.
 
 ---
 
@@ -149,17 +152,100 @@ onAuthStateChange((event, session) => {  // ← PAS async
 
 - Warnings Vite `Duplicate key "price"` et `"distance"` dans `setFormInitial` → nettoyés (les valeurs par défaut redondantes ont été retirées)
 
+### Bug 11 — Référence parrainage : code valide rejeté ("Code inconnu")
+
+**Symptôme** : entrée d'un code valide (`TST-1234`) au signup → "Code de parrainage inconnu" même si le code existe.
+
+**Cause** : la table `users` a une RLS policy `users_select_own (id = auth.uid())`. Pendant le signup, l'utilisateur n'est pas encore authentifié — `auth.uid()` retourne null — la query SELECT direct retourne 0 lignes même pour un code valide.
+
+**Fix** : nouvelle fonction SQL `lookup_referral_code(p_code TEXT)` SECURITY DEFINER qui bypasse RLS et retourne uniquement `{id, name}`. EXECUTE accordé à anon + authenticated (le code de parrainage est de toute façon partagé publiquement).
+
+Frontend `findUserByReferralCode` updated to call this RPC instead of direct query.
+
+### Bug 12 — Schema drift n°1 : signup `flagged` → `blocked`
+
+**Symptôme** : signup → "Database error saving new user".
+
+**Cause** : trigger `handle_new_auth_user` faisait `INSERT … ON CONFLICT DO UPDATE SET flagged = (...)` mais la colonne s'appelle `blocked` en prod.
+
+**Fix** : migration `fix_handle_new_auth_user_flagged_to_blocked` qui recrée le trigger avec la bonne colonne.
+
+### Bug 13 — Schema drift n°2 + 3 : crédit parrainage silencieusement échoué
+
+**Symptôme** : filleul créé OK, `referred_by` correctement résolu, mais ni le bonus +5 filleul ni le bonus +10 parrain ne sont crédités. Le tout silencieux côté frontend (try/catch + console.warn).
+
+**Causes** (deux drifts en cascade) :
+- Le RPC `credit_referral_bonus` insérait dans `token_transactions.related_user_id` mais la vraie colonne s'appelle `referred_user_id`
+- Le RPC mettait à jour `users.referrals_count` mais cette colonne n'existe pas (juste un compteur de stats)
+
+**Fix** : migration `fix_credit_referral_bonus_drop_referrals_count` qui :
+- Utilise `referred_user_id`
+- Retire l'update de `referrals_count` (à ajouter via une migration séparée si on veut le compteur)
+
+Validation : crédit manuel rétroactif appliqué pour test@test.fr (+10) et chuntao@gmail.com (+5) après le fix.
+
+---
+
+## 🚨 IMPORTANT — Schema drift majeur entre `supabase/SUPABASE_SCHEMA.sql` et la DB prod
+
+Pendant cette session, on a découvert que **plusieurs colonnes mentionnées dans le schéma SQL initial n'existent pas en prod** ou ont un nom différent. Cause probable : le SQL a évolué pendant le dev (Phase 2/3) sans migration formelle, ou une ancienne version a été partiellement appliquée.
+
+**Drifts confirmés et corrigés** :
+
+| Table | Code attendait | En prod réelle | Corrigé via |
+|---|---|---|---|
+| `device_fingerprints` | `flagged` | **`blocked`** (existe) | Trigger `handle_new_auth_user` |
+| `token_transactions` | `related_user_id` | **`referred_user_id`** (existe) | RPC `credit_referral_bonus` |
+| `users` | `referrals_count` | **n'existe pas** | RPC `credit_referral_bonus` |
+| `invoices` | `qr_code_data`, `payment_method`, `customer_address`, `customer_email`, `vat_intra`, `vat_reverse_charge`, `pdf_url`, `cancelled_at` | **n'existent pas** | (Pas encore corrigé — webhook insère dans des colonnes manquantes, l'insert échoue silencieusement, mais le crédit fonctionne) |
+
+**Schémas réels en prod (vérifiés via `information_schema.columns`)** :
+
+```
+users: id, email, name, phone, siret, evtc_number, company_name, vehicle_model,
+       vehicle_plate, pro_card_number, iban, vat_intra, referral_code, referred_by,
+       email_verified, siret_verified, evtc_verified, device_fingerprint,
+       device_check_token, play_integrity_verified, last_known_ip, risk_score,
+       flagged, flagged_reason, token_balance, last_monthly_bonus, preferences,
+       created_at, updated_at, deleted_at
+
+device_fingerprints: fingerprint, user_id, device_check_token,
+                     play_integrity_token, first_seen, last_seen,
+                     accounts_count, blocked, blocked_reason
+
+token_transactions: id, user_id, kind, tokens_delta, package_id, invoice_number,
+                    amount_ttc, amount_ht, amount_vat, vat_applied, vat_intra,
+                    payment_method, stripe_payment_intent_id, related_booking_id,
+                    related_invoice_id, referred_user_id, created_at
+
+invoices: id, user_id, booking_id, invoice_number, customer_name, amount_ht,
+          amount_vat, amount_ttc, vat_rate, status, fingerprint, paid_at,
+          issued_at, created_at
+```
+
+**Note attention** : ne PAS faire confiance au fichier `supabase/SUPABASE_SCHEMA.sql` qui semble être un état intermédiaire / aspirationnel. Toujours vérifier via `information_schema.columns` avant d'écrire des fonctions SQL ou des migrations.
+
+**À faire un jour (long cours)** : faire un audit complet de tous les drifts, choisir entre :
+- Aligner le code SQL sur le schéma actuel de prod (rapide, pragmatique)
+- Ou faire une migration qui amène la prod à matcher le schéma de référence (plus de boulot mais cohérent)
+
 ---
 
 ## 🐛 Bugs connus restants (non bloquants)
 
-### Schema drift sur la table `invoices`
+### Schema drift sur la table `invoices` (toujours présent)
 
-La fonction `stripe-webhook` essaie probablement d'insérer dans des colonnes (`qr_code_data`, `payment_method`) qui **n'existent pas** dans la DB de prod (vérifié via `information_schema.columns`). L'insert échoue silencieusement, mais le crédit (`credit_token_purchase` RPC) fonctionne quand même.
+La fonction `stripe-webhook` essaie d'insérer dans des colonnes (`qr_code_data`, `payment_method`, etc.) qui n'existent pas en prod. L'insert échoue silencieusement, mais le crédit (`credit_token_purchase` RPC) fonctionne quand même.
 
 **Conséquence** : la table `invoices` reste vide après les achats, mais les transactions sont bien tracées dans `token_transactions` avec leur `invoice_number`.
 
-**À faire dans une session future** : aligner soit le code de la fonction `stripe-webhook` avec le schéma actuel de `invoices`, soit ajouter une migration qui ajoute les colonnes manquantes.
+**À faire** : aligner soit le code de la fonction `stripe-webhook` avec le schéma actuel, soit ajouter les colonnes manquantes via migration.
+
+### Compteur `users.referrals_count`
+
+La colonne n'existe pas en prod. Le RPC ne l'incrémente plus. Si on veut afficher "X parrainages" dans l'UI, il faudra :
+- Soit ajouter la colonne via migration + remettre l'UPDATE dans le RPC
+- Soit calculer à la volée via `SELECT COUNT(*) FROM users WHERE referred_by = ?`
 
 ### Autres
 - `BLOCKERS.md` § B-2 (clé publique Stripe à vérifier) — non bloquant
@@ -209,13 +295,15 @@ Quand l'utilisateur voudra encaisser de vrais clients :
 
 Projet `olmhckwethdcxhvsrfie` (`trajetpro-prod`, région West EU - Paris).
 
-### Utilisateurs en DB
+### Utilisateurs en DB (au 2026-04-30 fin de session)
 
 | Email | Crédits | Note |
 |---|---|---|
-| `test@test.fr` | **60** (10 + 50 du test paiement) | Compte de test, mdp = `Test1234!` |
-| `bidbuh22@gmail.com` | 5 | Compte test |
-| `bidbuhh@gmail.com` | 5 | Compte test |
+| `test@test.fr` | **68** (10 + 50 paiement Pack Confort + 10 bonus parrain) | Compte de test, mdp = `Test1234!`, code parrainage `TST-1234` |
+| `chuntao@gmail.com` | 5 (bonus filleul, pas de welcome car même device) | Filleul de test@test.fr |
+| `hssouje3an@gmail.com` | 5 (welcome) | Compte créé via Option A (créé via SQL) |
+| `bidbuh22@gmail.com` | 5 | Compte test ancien |
+| `bidbuhh@gmail.com` | 5 | Compte test ancien (SIRET 84991133400027) |
 
 ### Edge Functions actives
 
@@ -224,6 +312,15 @@ Projet `olmhckwethdcxhvsrfie` (`trajetpro-prod`, région West EU - Paris).
 | `verify-siret` | non (anonyme OK) | 3 | ACTIVE |
 | `create-checkout-session` | oui | **6** | ACTIVE — priceIds compte utilisateur, validation clé Stripe au démarrage |
 | `stripe-webhook` | non (signature vérifiée) | 2 | ACTIVE |
+
+### Migrations SQL appliquées dans cette session (en plus des 6 historiques)
+
+| Migration | Effet |
+|---|---|
+| `add_lookup_referral_code_function` | Nouvelle RPC SECURITY DEFINER pour bypass RLS pendant le signup (validation code parrainage) |
+| `fix_handle_new_auth_user_flagged_to_blocked` | Trigger signup utilise `blocked` au lieu de `flagged` (drift) |
+| `fix_credit_referral_bonus_related_to_referred` | RPC parrainage utilise `referred_user_id` (drift) |
+| `fix_credit_referral_bonus_drop_referrals_count` | RPC parrainage : retrait de l'UPDATE `referrals_count` (colonne inexistante) |
 
 ### Tables (toutes avec RLS activée)
 
