@@ -2365,22 +2365,36 @@ function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, 
   const lowTokens = tokenBalance <= 3;
   const displayName = currentUser?.name || `${DRIVER_PROFILE.firstName} ${DRIVER_PROFILE.lastName}`;
   const displayEmail = currentUser?.email || DRIVER_PROFILE.email;
-  // Lit les valeurs du profil DB (currentUser), avec un fallback sur les
-  // constantes DRIVER_PROFILE si le champ est vide (utile pour l'expérience
-  // démo en mode invité ou compte fraîchement créé sans données pro saisies).
-  const fb = (val, fallback) => (val && String(val).trim() ? val : fallback);
-  const vehicle = [
-    fb(currentUser?.vehicleModel, DRIVER_PROFILE.vehicleModel),
-    fb(currentUser?.vehiclePlate, DRIVER_PROFILE.vehiclePlate),
-  ].filter(Boolean).join(" · ");
+  // Lit les valeurs du profil DB (currentUser).
+  //   - Mode invité  : fallback sur DRIVER_PROFILE (valeurs démo lisibles).
+  //   - Mode connecté : "À remplir" en italique gris pour les champs vides,
+  //     pour que l'utilisateur sache qu'il doit les compléter via le bouton
+  //     "Modifier mes informations" (et pas voir des fausses données).
+  const placeholder = "À remplir";
+  const has = (v) => v && String(v).trim().length > 0;
+  const fld = (val, demoFallback) => {
+    if (has(val)) return { value: val, isPlaceholder: false };
+    if (isGuest) return { value: demoFallback, isPlaceholder: false };
+    return { value: placeholder, isPlaceholder: true };
+  };
+  // Véhicule = combo modèle + plaque, à remplir si AU MOINS un des 2 manque
+  const vehicleField = (() => {
+    const m = currentUser?.vehicleModel;
+    const p = currentUser?.vehiclePlate;
+    if (has(m) && has(p)) return { value: `${m} · ${p}`, isPlaceholder: false };
+    if (isGuest) return { value: `${DRIVER_PROFILE.vehicleModel} · ${DRIVER_PROFILE.vehiclePlate}`, isPlaceholder: false };
+    return { value: placeholder, isPlaceholder: true };
+  })();
   const items = [
-    { icon: Building2, label: "Mon entreprise", value: fb(currentUser?.companyName, DRIVER_PROFILE.companyName) },
-    { icon: FileCheck, label: "N° SIRET", value: fb(currentUser?.siret, DRIVER_PROFILE.siret) },
-    { icon: Shield, label: "Inscription VTC", value: fb(currentUser?.evtcNumber, DRIVER_PROFILE.vtcNumber) },
-    { icon: CreditCard, label: "Carte pro.", value: fb(currentUser?.proCardNumber, DRIVER_PROFILE.proCardNumber) },
-    { icon: Car, label: "Véhicule", value: vehicle || "—" },
-    { icon: Phone, label: "Téléphone", value: fb(currentUser?.phone, DRIVER_PROFILE.phone) },
-    { icon: Mail, label: "Email", value: displayEmail },
+    { icon: Building2, label: "Mon entreprise", ...fld(currentUser?.companyName, DRIVER_PROFILE.companyName) },
+    // SIRET : toujours rempli (validé INSEE au signup), pas de cas vide
+    { icon: FileCheck, label: "N° SIRET", value: currentUser?.siret || DRIVER_PROFILE.siret, isPlaceholder: false },
+    { icon: Shield, label: "Inscription VTC", ...fld(currentUser?.evtcNumber, DRIVER_PROFILE.vtcNumber) },
+    { icon: CreditCard, label: "Carte pro.", ...fld(currentUser?.proCardNumber, DRIVER_PROFILE.proCardNumber) },
+    { icon: Car, label: "Véhicule", ...vehicleField },
+    { icon: Phone, label: "Téléphone", ...fld(currentUser?.phone, DRIVER_PROFILE.phone) },
+    // Email : géré par auth, jamais vide pour un compte
+    { icon: Mail, label: "Email", value: displayEmail, isPlaceholder: false },
   ];
 
   return (
@@ -2542,7 +2556,18 @@ function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, 
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 11, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{it.label}</div>
-                <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.value}</div>
+                <div style={{
+                  fontSize: 13,
+                  fontWeight: it.isPlaceholder ? 400 : 600,
+                  fontStyle: it.isPlaceholder ? "italic" : "normal",
+                  color: it.isPlaceholder ? "var(--text-dim)" : "var(--text)",
+                  marginTop: 2,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}>
+                  {it.value}
+                </div>
               </div>
             </div>
           ))}
