@@ -494,7 +494,7 @@ export async function updateUserProfile(userId, updates) {
  *   champs_incertains: string[],
  *   transcription_corrigee: string,
  * }>}
- * @throws {Error} si l'API Claude échoue, si JWT invalide, ou rate limit
+ * @throws {Error} si l'API Gemini échoue, si JWT invalide, ou rate limit
  *   atteint. Le caller doit catcher et fallback sur le parser local.
  */
 export async function extractBookingFromVoice(transcription) {
@@ -507,12 +507,13 @@ export async function extractBookingFromVoice(transcription) {
   if (error) {
     // Lecture du body d'erreur (idem pattern createCheckoutSession)
     let detail = error?.message || 'Erreur extraction vocale';
+    let parsed = null;
     if (error?.context && typeof error.context.text === 'function') {
       try {
         const raw = await error.context.text();
         if (raw) {
           try {
-            const parsed = JSON.parse(raw);
+            parsed = JSON.parse(raw);
             detail = parsed?.detail || parsed?.error || raw;
           } catch {
             detail = raw;
@@ -525,6 +526,10 @@ export async function extractBookingFromVoice(transcription) {
     console.error('[extractBookingFromVoice] Edge function error:', {
       status: error?.context?.status,
       detail,
+      // Gemini renvoie un body JSON détaillé en cas d'erreur (quota, key invalide, etc.)
+      // L'Edge Function le forward dans `gemini_body` pour le diagnostic.
+      gemini_body: parsed?.gemini_body,
+      fullBody: parsed,
     });
     throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
   }

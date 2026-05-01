@@ -57,7 +57,7 @@ CREATE TABLE public.users (
   referrals_count INTEGER DEFAULT 0,
 
   -- Bonus mensuel
-  last_monthly_bonus_at TIMESTAMPTZ,
+  last_monthly_bonus DATE,
 
   -- Anti-fraude
   email_verified BOOLEAN DEFAULT FALSE,

@@ -4045,7 +4045,7 @@ function profileFromDb(row) {
     referralCode: row.referral_code,
     referredBy: row.referred_by,
     createdAt: row.created_at,
-    lastMonthlyBonus: row.last_monthly_bonus_at,
+    lastMonthlyBonus: row.last_monthly_bonus,
     referralStats: {
       invitedCount: row.referrals_count || 0,
       tokensEarned: 0,
