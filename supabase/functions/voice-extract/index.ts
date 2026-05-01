@@ -2,12 +2,13 @@
 // EDGE FUNCTION : voice-extract
 // ============================================================================
 // Reçoit une transcription vocale (faite côté client par Web Speech API),
-// la nettoie via Google Gemini 2.0 Flash, et retourne un JSON structuré
+// la nettoie via Google Gemini 2.5 Flash, et retourne un JSON structuré
 // avec les champs d'un bon de course (client, lieux, distance, prix).
 //
 // Migration Anthropic Claude → Google Gemini (2026-05-01) : tier gratuit
 // largement suffisant pour le volume actuel ; modèle 2.0 Flash rapide et
-// précis sur le français. Logique métier inchangée — même system prompt,
+// précis sur le français (gemini-2.0-flash a été déprécié en 2026,
+// remplacé par gemini-2.5-flash). Logique métier inchangée — même system prompt,
 // même structure JSON de retour. Pas de SDK Gemini pour Deno → on appelle
 // l'API REST directement via fetch().
 //
@@ -20,7 +21,7 @@
 //   - GEMINI_API_KEY     (clé AIza... depuis https://aistudio.google.com/apikey)
 //   - SUPABASE_URL, SUPABASE_ANON_KEY (auto-injectés par Supabase)
 //
-// Coût : tier gratuit Gemini 2.0 Flash = 1500 req/jour gratuites côté Google.
+// Coût : tier gratuit Gemini 2.5 Flash = 1500 req/jour gratuites côté Google.
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -92,7 +93,7 @@ CONTRAINTES STRICTES :
 // ----------------------------------------------------------------------------
 // Configuration Gemini
 // ----------------------------------------------------------------------------
-const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_MODEL = "gemini-2.5-flash";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 // ----------------------------------------------------------------------------
@@ -218,7 +219,7 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Transcription trop longue (max 5000 caractères)" }, 400);
     }
 
-    // 5. Appel Google Gemini 2.0 Flash en mode JSON strict.
+    // 5. Appel Google Gemini 2.5 Flash en mode JSON strict.
     //    Pas de SDK Gemini pour Deno → fetch() natif.
     //    `responseMimeType: "application/json"` force Gemini à ne renvoyer
     //    QUE du JSON parsable, sans préambule ni markdown.

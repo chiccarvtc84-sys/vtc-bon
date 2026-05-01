@@ -331,7 +331,7 @@ Projet `olmhckwethdcxhvsrfie` (`trajetpro-prod`, région West EU - Paris).
 | `verify-siret` | non (anonyme OK) | 3 | ACTIVE |
 | `create-checkout-session` | oui | **12** | ACTIVE — Live mode (priceIds Live) |
 | `stripe-webhook` | non (signature vérifiée) | 2 | ACTIVE |
-| `voice-extract` | oui | **4** | ACTIVE — Google Gemini 2.0 Flash (free tier), dictée vocale intelligente — migré depuis Claude Sonnet 4.6 le 2026-05-01 |
+| `voice-extract` | oui | **6** | ACTIVE — Google Gemini 2.5 Flash (free tier), dictée vocale intelligente — migré depuis Claude Sonnet 4.6 le 2026-05-01. Note : `gemini-2.0-flash` était déprécié en 2026 (404 NOT_FOUND), remplacé par `gemini-2.5-flash` v6. |
 
 ### Secret `GEMINI_API_KEY` (Supabase Edge Functions)
 
