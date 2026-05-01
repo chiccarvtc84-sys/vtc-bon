@@ -260,7 +260,13 @@ Deno.serve(async (req: Request) => {
           generationConfig: {
             responseMimeType: "application/json",
             temperature: 0,
-            maxOutputTokens: 1024,
+            // Gemini 2.5 Flash a un mode "thinking" activé par défaut qui
+            // consomme une partie du budget AVANT de générer la réponse.
+            // Pour de l'extraction JSON simple on n'en a pas besoin :
+            // thinkingBudget: 0 désactive complètement le raisonnement interne
+            // (réponse plus rapide + JSON jamais tronqué).
+            thinkingConfig: { thinkingBudget: 0 },
+            maxOutputTokens: 2048,
           },
         }),
         signal: controller.signal,
