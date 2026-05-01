@@ -2,14 +2,14 @@
 // EDGE FUNCTION : voice-extract
 // ============================================================================
 // Reçoit une transcription vocale (faite côté client par Web Speech API),
-// la nettoie via Claude Sonnet 4.6, et retourne un JSON structuré avec
-// les champs d'un bon de course (client, lieux, distance, prix).
+// la nettoie via Google Gemini 2.0 Flash, et retourne un JSON structuré
+// avec les champs d'un bon de course (client, lieux, distance, prix).
 //
-// Pourquoi Claude au lieu du parser local (`src/lib/voiceParser.js`) :
-//   - Tolérance aux accents étrangers (maghrébin, ouest-africain, asiatique…)
-//   - Correction phonétique (Carime → Karim, Niouyenne → Nguyen…)
-//   - Reformatage propre des lieux (gares, aéroports, monuments)
-//   - Score de confiance + liste des champs incertains
+// Migration Anthropic Claude → Google Gemini (2026-05-01) : tier gratuit
+// largement suffisant pour le volume actuel ; modèle 2.0 Flash rapide et
+// précis sur le français. Logique métier inchangée — même system prompt,
+// même structure JSON de retour. Pas de SDK Gemini pour Deno → on appelle
+// l'API REST directement via fetch().
 //
 // Sécurité :
 //   - JWT requis (verify_jwt: true) → seuls les utilisateurs connectés
@@ -17,16 +17,12 @@
 //   - Rate limit en mémoire : 30 calls/user/minute (anti-abus)
 //
 // Variables d'env :
-//   - ANTHROPIC_API_KEY  (clé sk-ant-api03-… depuis console.anthropic.com)
+//   - GEMINI_API_KEY     (clé AIza... depuis https://aistudio.google.com/apikey)
 //   - SUPABASE_URL, SUPABASE_ANON_KEY (auto-injectés par Supabase)
 //
-// Coût indicatif :
-//   - Input : ~700-900 tokens (system + transcription) → 90% en cache après le 1er call
-//   - Output : ~150 tokens (JSON court)
-//   - ~0.003 €/extraction sur Sonnet 4.6 cache miss, ~0.0006 € cache hit
+// Coût : tier gratuit Gemini 2.0 Flash = 1500 req/jour gratuites côté Google.
 // ============================================================================
 
-import Anthropic from "https://esm.sh/@anthropic-ai/sdk@0.40.1";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 // ----------------------------------------------------------------------------
@@ -94,6 +90,12 @@ CONTRAINTES STRICTES :
 5. Si aucune info exploitable → tous les champs à null, confiance "basse", explique brièvement dans transcription_corrigee`;
 
 // ----------------------------------------------------------------------------
+// Configuration Gemini
+// ----------------------------------------------------------------------------
+const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+// ----------------------------------------------------------------------------
 // CORS
 // ----------------------------------------------------------------------------
 function buildCorsHeaders(reqOrigin: string | null): Record<string, string> {
@@ -122,7 +124,7 @@ function buildCorsHeaders(reqOrigin: string | null): Record<string, string> {
 // Rate limit en mémoire (best-effort — les workers Edge peuvent être recyclés)
 // ----------------------------------------------------------------------------
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX = 30; // 30 extractions/user/minute (le chauffeur fait peut-être 1 course toutes les 10-30 min)
+const RATE_LIMIT_MAX = 30;
 const recentCalls = new Map<string, number[]>();
 
 function isRateLimited(userId: string): boolean {
@@ -140,13 +142,12 @@ function isRateLimited(userId: string): boolean {
 }
 
 // ----------------------------------------------------------------------------
-// Parsing robuste de la réponse Claude (gère le cas où il enrobe en ```json)
+// Parsing robuste : Gemini en mode JSON strict est généralement clean,
+// mais on garde la dégradation gracieuse au cas où.
 // ----------------------------------------------------------------------------
 function safeParseJson(text: string): unknown {
-  // Supprime les fences ```json ... ``` ou ``` ... ```
   let cleaned = text.trim();
   cleaned = cleaned.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "");
-  // Si Claude a quand même prefixé/suffixé du texte, on essaye d'extraire le 1er bloc {...}
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
   if (jsonMatch) cleaned = jsonMatch[0];
   return JSON.parse(cleaned);
@@ -176,14 +177,14 @@ Deno.serve(async (req: Request) => {
 
   try {
     // 1. Validation env
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    const apiKey = Deno.env.get("GEMINI_API_KEY");
     if (!apiKey) {
-      return json({ error: "Service indisponible (ANTHROPIC_API_KEY manquant côté serveur)" }, 500);
+      return json({ error: "Service indisponible (GEMINI_API_KEY manquant côté serveur)" }, 500);
     }
-    if (!apiKey.startsWith("sk-ant-")) {
+    if (apiKey.length < 20) {
       return json({
-        error: "ANTHROPIC_API_KEY invalide",
-        detail: `La clé doit commencer par sk-ant-. Reçu : '${apiKey.slice(0, 10)}...'`,
+        error: "GEMINI_API_KEY invalide",
+        detail: `La clé semble tronquée. Reçu : '${apiKey.slice(0, 6)}...' (${apiKey.length} caractères)`,
       }, 500);
     }
 
@@ -217,80 +218,130 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Transcription trop longue (max 5000 caractères)" }, 400);
     }
 
-    // 5. Appel Claude Sonnet 4.6 avec prompt caching
-    //    Le system prompt est mis en cache (cache_control: ephemeral) →
-    //    après le 1er call, les call suivants paient ~10% du prix d'input
-    //    pour la portion système (au-dessus du seuil de cache 1024 tokens).
-    const anthropic = new Anthropic({ apiKey });
-
-    // AbortController pour le timeout 30s spécifié par le user
+    // 5. Appel Google Gemini 2.0 Flash en mode JSON strict.
+    //    Pas de SDK Gemini pour Deno → fetch() natif.
+    //    `responseMimeType: "application/json"` force Gemini à ne renvoyer
+    //    QUE du JSON parsable, sans préambule ni markdown.
+    //    Gemini gère le caching côté serveur automatiquement (pas de
+    //    `cache_control` à passer).
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30_000);
 
-    let response;
+    let geminiResponse: {
+      candidates?: Array<{
+        content?: { parts?: Array<{ text?: string }> };
+        finishReason?: string;
+        safetyRatings?: unknown;
+      }>;
+      usageMetadata?: {
+        promptTokenCount?: number;
+        candidatesTokenCount?: number;
+        totalTokenCount?: number;
+      };
+      promptFeedback?: { blockReason?: string };
+    };
+
     try {
-      response = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1024,
-        temperature: 0,
-        system: [
-          {
-            type: "text",
-            text: SYSTEM_PROMPT,
-            cache_control: { type: "ephemeral" },
+      const url = `${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`;
+      const fetchResponse = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: SYSTEM_PROMPT }],
           },
-        ],
-        messages: [
-          {
-            role: "user",
-            content: `Transcription à analyser :\n\n${transcription}`,
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: `Transcription à analyser :\n\n${transcription}` }],
+            },
+          ],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0,
+            maxOutputTokens: 1024,
           },
-        ],
-      }, { signal: controller.signal });
+        }),
+        signal: controller.signal,
+      });
+
+      if (!fetchResponse.ok) {
+        const errBody = await fetchResponse.text();
+        console.error("[voice-extract] Gemini API error:", fetchResponse.status, errBody.slice(0, 500));
+        return json({
+          error: "Erreur API Gemini",
+          detail: `${fetchResponse.status} ${fetchResponse.statusText}`,
+          gemini_body: errBody.slice(0, 500),
+        }, 502);
+      }
+
+      geminiResponse = await fetchResponse.json();
     } finally {
       clearTimeout(timeoutId);
     }
 
-    // 6. Extraction du texte de la réponse
-    const firstText = response.content.find((b) => b.type === "text");
-    if (!firstText || firstText.type !== "text") {
-      console.error("[voice-extract] Réponse Claude sans bloc texte:", response.content);
-      return json({ error: "Réponse Claude sans contenu texte" }, 500);
+    // 6. Vérification que Gemini a bien renvoyé du contenu (pas bloqué pour
+    //    safety, par exemple).
+    if (geminiResponse?.promptFeedback?.blockReason) {
+      console.error("[voice-extract] Gemini prompt blocked:", geminiResponse.promptFeedback.blockReason);
+      return json({
+        error: "Requête bloquée par Gemini (safety filter)",
+        detail: geminiResponse.promptFeedback.blockReason,
+      }, 400);
     }
 
-    // 7. Parse JSON robuste
+    const candidates = geminiResponse?.candidates;
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      console.error("[voice-extract] Gemini sans candidats:", geminiResponse);
+      return json({ error: "Réponse Gemini sans candidat" }, 500);
+    }
+
+    const firstCandidate = candidates[0];
+    const text = firstCandidate?.content?.parts?.[0]?.text;
+    if (!text) {
+      const finishReason = firstCandidate?.finishReason;
+      console.error("[voice-extract] Gemini réponse vide. finishReason:", finishReason);
+      return json({
+        error: "Réponse Gemini sans contenu texte",
+        detail: `finishReason: ${finishReason || "inconnu"}`,
+      }, 500);
+    }
+
+    // 7. Parse JSON robuste (Gemini en mode JSON strict est très propre,
+    //    mais filet de sécurité au cas où).
     let parsed: unknown;
     try {
-      parsed = safeParseJson(firstText.text);
+      parsed = safeParseJson(text);
     } catch (parseErr) {
-      console.error("[voice-extract] JSON parse failed:", firstText.text);
+      console.error("[voice-extract] JSON parse failed:", text.slice(0, 500));
       return json({
-        error: "Réponse Claude invalide (JSON malformé)",
+        error: "Réponse Gemini invalide (JSON malformé)",
         detail: String(parseErr),
-        raw: firstText.text.slice(0, 500),
+        raw: text.slice(0, 500),
       }, 500);
     }
 
     // 8. Logs (sans données sensibles en production)
+    const usage = geminiResponse?.usageMetadata;
     console.log("[voice-extract] OK", {
       user_id: user.id,
       transcription_len: transcription.length,
-      cache_creation_tokens: response.usage.cache_creation_input_tokens ?? 0,
-      cache_read_tokens: response.usage.cache_read_input_tokens ?? 0,
-      input_tokens: response.usage.input_tokens,
-      output_tokens: response.usage.output_tokens,
+      finish_reason: firstCandidate.finishReason,
+      prompt_tokens: usage?.promptTokenCount ?? 0,
+      output_tokens: usage?.candidatesTokenCount ?? 0,
+      total_tokens: usage?.totalTokenCount ?? 0,
     });
 
     return json(parsed, 200);
   } catch (err) {
-    const e = err as { name?: string; message?: string; status?: number };
+    const e = err as { name?: string; message?: string };
     console.error("[voice-extract] Internal error:", err);
     if (e?.name === "AbortError") {
-      return json({ error: "Délai d'attente dépassé (30s) côté API Claude" }, 504);
+      return json({ error: "Délai d'attente dépassé (30s) côté API Gemini" }, 504);
     }
     return json({
       error: "Erreur interne lors de l'extraction vocale",
       detail: e?.message || String(err),
-    }, e?.status && e.status >= 400 && e.status < 600 ? e.status : 500);
+    }, 500);
   }
 });

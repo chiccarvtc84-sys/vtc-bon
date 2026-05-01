@@ -331,11 +331,13 @@ Projet `olmhckwethdcxhvsrfie` (`trajetpro-prod`, région West EU - Paris).
 | `verify-siret` | non (anonyme OK) | 3 | ACTIVE |
 | `create-checkout-session` | oui | **12** | ACTIVE — Live mode (priceIds Live) |
 | `stripe-webhook` | non (signature vérifiée) | 2 | ACTIVE |
-| `voice-extract` | oui | **1** | ACTIVE — Claude Sonnet 4.6 + prompt caching, dictée vocale intelligente |
+| `voice-extract` | oui | **4** | ACTIVE — Google Gemini 2.0 Flash (free tier), dictée vocale intelligente — migré depuis Claude Sonnet 4.6 le 2026-05-01 |
 
-### Secret `ANTHROPIC_API_KEY` (Supabase Edge Functions)
+### Secret `GEMINI_API_KEY` (Supabase Edge Functions)
 
-Ajouté pour la fonction `voice-extract`. Clé `sk-ant-…` à récupérer sur [console.anthropic.com](https://console.anthropic.com/settings/keys). À roter immédiatement si exposée dans un chat ou un commit (anti-pattern : clé partagée dans le chat session 2026-05-01 — déjà signalée).
+Ajouté pour la fonction `voice-extract`. Clé `AIza…` à récupérer sur [aistudio.google.com](https://aistudio.google.com/app/apikey). Modèle utilisé : `gemini-2.0-flash` (tier gratuit généreux : ~1500 req/jour). À roter immédiatement si exposée dans un chat ou un commit.
+
+**Historique** : la fonction utilisait précédemment `ANTHROPIC_API_KEY` + Claude Sonnet 4.6 avec prompt caching (commit `7b62317`, 2026-05-01 20:17). Migration vers Gemini le 2026-05-01 20:40 pour passer sur le tier gratuit (Google) — l'extraction est suffisamment simple pour Gemini 2.0 Flash, qui supporte aussi le mode `responseMimeType: "application/json"` natif (pas besoin de parser un bloc markdown). Le `SYSTEM_PROMPT` reste **identique au mot près** (corrections phonétiques Maghreb / Afrique / Asie). Le secret `ANTHROPIC_API_KEY` peut être supprimé des secrets Supabase une fois le déploiement Gemini validé.
 
 ### Migrations SQL appliquées dans cette session (en plus des 6 historiques)
 
