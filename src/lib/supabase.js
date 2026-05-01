@@ -475,6 +475,63 @@ export async function updateUserProfile(userId, updates) {
 }
 
 /**
+ * Extraction intelligente d'un bon de course à partir d'une transcription
+ * vocale, via Claude Sonnet 4.6 (Edge Function `voice-extract`).
+ *
+ * Pourquoi : la reconnaissance vocale du navigateur (Web Speech API) produit
+ * souvent des erreurs phonétiques sur les noms à accents étrangers et les
+ * lieux. Claude nettoie intelligemment et corrige (Carime → Karim, etc.).
+ *
+ * @param {string} transcription - Texte brut de l'ASR (max 5000 caractères)
+ * @returns {Promise<{
+ *   client_prenom: string|null,
+ *   client_nom: string|null,
+ *   lieu_prise_en_charge: string|null,
+ *   lieu_depose: string|null,
+ *   distance_km: number|null,
+ *   prix_euros: number|null,
+ *   confiance: 'haute'|'moyenne'|'basse',
+ *   champs_incertains: string[],
+ *   transcription_corrigee: string,
+ * }>}
+ * @throws {Error} si l'API Claude échoue, si JWT invalide, ou rate limit
+ *   atteint. Le caller doit catcher et fallback sur le parser local.
+ */
+export async function extractBookingFromVoice(transcription) {
+  if (!transcription || !transcription.trim()) {
+    throw new Error('Transcription vide');
+  }
+  const { data, error } = await supabase.functions.invoke('voice-extract', {
+    body: { transcription: transcription.trim() },
+  });
+  if (error) {
+    // Lecture du body d'erreur (idem pattern createCheckoutSession)
+    let detail = error?.message || 'Erreur extraction vocale';
+    if (error?.context && typeof error.context.text === 'function') {
+      try {
+        const raw = await error.context.text();
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            detail = parsed?.detail || parsed?.error || raw;
+          } catch {
+            detail = raw;
+          }
+        }
+      } catch {
+        // body déjà consommé
+      }
+    }
+    console.error('[extractBookingFromVoice] Edge function error:', {
+      status: error?.context?.status,
+      detail,
+    });
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+  }
+  return data;
+}
+
+/**
  * Cherche un utilisateur par son code de parrainage (utilisé au signup
  * pour valider que le code existe avant de tenter le crédit).
  *

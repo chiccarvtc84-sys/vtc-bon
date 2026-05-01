@@ -32,6 +32,7 @@ import {
   findUserByReferralCode,
   creditReferralBonus,
   updateUserProfile,
+  extractBookingFromVoice,
   createCheckoutSession,
   findPurchaseBySessionId,
   verifySiret as sbVerifySiret,
@@ -738,6 +739,17 @@ function VoiceCapture({ open, onClose, onConfirm }) {
   const [error, setError] = useState("");
   const [silenceCountdown, setSilenceCountdown] = useState(0); // 5..0 quand on s'approche du timeout
 
+  // ---- Raffinement IA via Claude (Edge Function voice-extract) ----
+  // Stratégie : le parser local (parseVoiceCommandV2) tourne en preview live
+  // pendant que l'ASR transcrit (instantané, gratuit). Quand l'ASR finalise,
+  // on appelle Claude pour nettoyer la transcription et corriger les noms à
+  // accents étrangers + lieux phonétiquement bruités. Si Claude échoue, on
+  // garde le résultat local (déjà rendu) — l'utilisateur n'est jamais bloqué.
+  const [aiLoading, setAiLoading] = useState(false);   // un appel cloud est en cours
+  const [aiResult, setAiResult] = useState(null);      // dernier JSON Claude { transcription_corrigee, champs_incertains, confiance, ... }
+  const [aiError, setAiError] = useState("");          // message d'erreur cloud (silencieux UI, pour debug)
+  const aiCallIdRef = useRef(0);                       // identifiant pour ignorer les réponses obsolètes (race condition)
+
   // ---- Refs (n'invoquent pas le re-render) ----
   const recognitionRef = useRef(null);
   const silenceTimerRef = useRef(null);
@@ -769,6 +781,10 @@ function VoiceCapture({ open, onClose, onConfirm }) {
       setError("");
       setListening(false);
       setSilenceCountdown(0);
+      setAiLoading(false);
+      setAiResult(null);
+      setAiError("");
+      aiCallIdRef.current = 0;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -905,11 +921,64 @@ function VoiceCapture({ open, onClose, onConfirm }) {
     setSilenceCountdown(0);
     try { recognitionRef.current?.stop(); } catch(_) {}
     setListening(false);
-    // Parse final
+    // Parse final (local, instantané — sert de base + de fallback)
     const finalText = finalTranscriptRef.current.trim();
     if (finalText) {
       setTranscript(finalText);
-      setParsed(parseVoiceCommandV2(finalText));
+      const localParsed = parseVoiceCommandV2(finalText);
+      setParsed(localParsed);
+      // Lance le raffinement IA en arrière-plan (~1-2s)
+      refineWithAi(finalText, localParsed);
+    }
+  }
+
+  // Fusionne le résultat Claude (snake_case, partiel) avec le résultat local
+  // (camelCase, complet). Claude couvre : nom/prénom, lieux, distance, prix.
+  // Local couvre en plus : time, passengers, hasLuggage. On garde les
+  // valeurs locales pour les champs que Claude ne traite pas.
+  function mergeAiAndLocal(ai, local) {
+    if (!ai) return local;
+    const fullName = [ai.client_prenom, ai.client_nom]
+      .filter((s) => s && String(s).trim())
+      .join(" ")
+      .trim();
+    return {
+      ...local,
+      // Champs traités par Claude (priorité au cloud)
+      customerName: fullName || local?.customerName || "",
+      pickupAddress: ai.lieu_prise_en_charge || local?.pickupAddress || "",
+      dropoffAddress: ai.lieu_depose || local?.dropoffAddress || "",
+      distance: typeof ai.distance_km === "number" ? ai.distance_km : (local?.distance ?? null),
+      price: typeof ai.prix_euros === "number" ? ai.prix_euros : (local?.price ?? null),
+      // Champs intacts (Claude ne les extrait pas)
+      time: local?.time || "",
+      passengers: local?.passengers ?? 1,
+      hasLuggage: local?.hasLuggage ?? false,
+      intent: local?.intent || "creation_course_vtc",
+      confidence: local?.confidence || {},
+    };
+  }
+
+  async function refineWithAi(text, localParsed) {
+    if (!text || text.trim().length < 4) return;
+    const callId = ++aiCallIdRef.current;
+    setAiLoading(true);
+    setAiError("");
+    try {
+      const ai = await extractBookingFromVoice(text);
+      // Une nouvelle dictée a peut-être démarré entre-temps — on ignore
+      // la réponse obsolète pour éviter d'écraser un parse plus récent.
+      if (callId !== aiCallIdRef.current) return;
+      setAiResult(ai);
+      setParsed(mergeAiAndLocal(ai, localParsed));
+    } catch (err) {
+      if (callId !== aiCallIdRef.current) return;
+      console.warn("[VoiceCapture] Refine IA échoué (fallback local):", err?.message);
+      setAiError(err?.message || "Service IA indisponible");
+      // On garde `parsed` tel qu'il est (résultat local) — l'utilisateur
+      // n'est jamais bloqué.
+    } finally {
+      if (callId === aiCallIdRef.current) setAiLoading(false);
     }
   }
 
@@ -918,7 +987,9 @@ function VoiceCapture({ open, onClose, onConfirm }) {
     setTranscript(example);
     finalTranscriptRef.current = example;
     setFinalTranscript(example);
-    setParsed(parseVoiceCommandV2(example));
+    const localParsed = parseVoiceCommandV2(example);
+    setParsed(localParsed);
+    refineWithAi(example, localParsed);
   };
 
   const onManualEdit = (e) => {
@@ -927,6 +998,18 @@ function VoiceCapture({ open, onClose, onConfirm }) {
     finalTranscriptRef.current = v;
     if (v.length > 4) setParsed(parseVoiceCommandV2(v));
     else setParsed(null);
+    // L'édition manuelle n'appelle PAS Claude (anti-spam). L'utilisateur peut
+    // réutiliser le bouton "Réanalyser avec IA" ci-dessous s'il veut un raffinement
+    // après modification du texte.
+    setAiResult(null);
+  };
+
+  // Bouton manuel "Réanalyser avec IA" affiché si l'utilisateur a édité le
+  // texte ou si la confiance Claude est basse.
+  const reAnalyzeAi = () => {
+    const text = finalTranscriptRef.current.trim();
+    if (!text) return;
+    refineWithAi(text, parsed);
   };
 
   const confirm = () => {
@@ -1033,17 +1116,44 @@ function VoiceCapture({ open, onClose, onConfirm }) {
           </div>
 
           <div>
-            <div className="tp-label" style={{ marginBottom: 6 }}>Transcription</div>
+            {/* Bandeau "Transcription corrigée par IA" — affiché si Claude a renvoyé
+                une version reformulée différente de l'original. Utile pour que le
+                chauffeur voit ce que l'IA a interprété. */}
+            {aiResult?.transcription_corrigee && aiResult.transcription_corrigee.trim() && (
+              <div style={{ marginBottom: 10, padding: "8px 10px", background: "rgba(244,185,66,0.06)", borderRadius: 8, border: "1px solid rgba(244,185,66,0.15)" }}>
+                <div style={{ fontSize: 10, color: "var(--accent)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                  <Sparkles size={10}/> Compris par l'IA
+                </div>
+                <div style={{ fontSize: 12, color: "var(--text-dim)", lineHeight: 1.4, fontStyle: "italic" }}>
+                  {aiResult.transcription_corrigee}
+                </div>
+              </div>
+            )}
+
+            <div className="tp-label" style={{ marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+              Transcription
+              {aiLoading && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--accent)", fontWeight: 600, marginLeft: 4 }}>
+                  <Loader2 size={11} style={{ animation: "tp-spin 1s linear infinite" }}/>
+                  Raffinement IA…
+                </span>
+              )}
+            </div>
             <textarea className="tp-input" rows={3}
               placeholder="Ex : Je voudrais récupérer un Aurélien Matro à Avignon centre pour la gare TGV à 12h50 ils seront 3 avec valises..."
               value={transcript} onChange={onManualEdit} style={{ resize: "vertical", minHeight: 72 }}/>
             {!supported && <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>Vous pouvez taper manuellement la phrase ci-dessus.</div>}
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
               <button onClick={useExample} className="tp-btn tp-btn-outline" style={{ fontSize: 12, padding: "8px 12px" }}>
                 <Sparkles size={12}/> Tester l'exemple
               </button>
               {transcript && (
-                <button onClick={() => { setTranscript(""); setParsed(null); }} className="tp-btn tp-btn-ghost" style={{ fontSize: 12, padding: "8px 12px" }}>Effacer</button>
+                <button onClick={() => { setTranscript(""); setParsed(null); setAiResult(null); }} className="tp-btn tp-btn-ghost" style={{ fontSize: 12, padding: "8px 12px" }}>Effacer</button>
+              )}
+              {transcript && !aiLoading && (
+                <button onClick={reAnalyzeAi} className="tp-btn tp-btn-ghost" style={{ fontSize: 12, padding: "8px 12px" }} title="Re-soumet le texte à l'IA pour un nouveau parsing">
+                  <Sparkles size={12}/> Réanalyser avec IA
+                </button>
               )}
             </div>
           </div>
@@ -1052,15 +1162,52 @@ function VoiceCapture({ open, onClose, onConfirm }) {
             <div className="tp-fade-in" style={{ marginTop: 20 }}>
               <div className="tp-label" style={{ marginBottom: 10 }}>Champs détectés</div>
               <div className="tp-card" style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12, background: "var(--surface-2)" }}>
-                <FieldRow icon={UserIcon} label="Client" value={parsed.customerName || "—"} detected={!!parsed.customerName}/>
-                <FieldRow icon={MapPin} label="Prise en charge" value={parsed.pickupAddress || "—"} detected={!!parsed.pickupAddress}/>
-                <FieldRow icon={Navigation} label="Destination" value={parsed.dropoffAddress || "—"} detected={!!parsed.dropoffAddress}/>
-                <FieldRow icon={Clock} label="Heure" value={parsed.time || "—"} detected={!!parsed.time}/>
-                <FieldRow icon={Users} label="Passagers" value={String(parsed.passengers)} detected/>
-                <FieldRow icon={Briefcase} label="Bagages" value={parsed.hasLuggage ? "Oui" : "Non"} detected/>
-                <FieldRow icon={Car} label="Distance" value={parsed.distance != null ? `${parsed.distance} km` : "—"} detected={parsed.distance != null}/>
-                <FieldRow icon={Euro} label="Tarif" value={parsed.price != null ? `${parsed.price} €` : "—"} detected={parsed.price != null}/>
+                {/* Mapping des noms de champs Claude → champs UI pour les warnings ⚠️.
+                    aiResult.champs_incertains contient des chaînes comme "client_prenom",
+                    "lieu_prise_en_charge", etc. (cf. system prompt). */}
+                {(() => {
+                  const incert = new Set(aiResult?.champs_incertains || []);
+                  const isUncertain = (...keys) => keys.some(k => incert.has(k));
+                  return (
+                    <>
+                      <FieldRow icon={UserIcon} label="Client" value={parsed.customerName || "—"} detected={!!parsed.customerName} uncertain={isUncertain("client_prenom", "client_nom")}/>
+                      <FieldRow icon={MapPin} label="Prise en charge" value={parsed.pickupAddress || "—"} detected={!!parsed.pickupAddress} uncertain={isUncertain("lieu_prise_en_charge")}/>
+                      <FieldRow icon={Navigation} label="Destination" value={parsed.dropoffAddress || "—"} detected={!!parsed.dropoffAddress} uncertain={isUncertain("lieu_depose")}/>
+                      <FieldRow icon={Clock} label="Heure" value={parsed.time || "—"} detected={!!parsed.time}/>
+                      <FieldRow icon={Users} label="Passagers" value={String(parsed.passengers)} detected/>
+                      <FieldRow icon={Briefcase} label="Bagages" value={parsed.hasLuggage ? "Oui" : "Non"} detected/>
+                      <FieldRow icon={Car} label="Distance" value={parsed.distance != null ? `${parsed.distance} km` : "—"} detected={parsed.distance != null} uncertain={isUncertain("distance_km")}/>
+                      <FieldRow icon={Euro} label="Tarif" value={parsed.price != null ? `${parsed.price} €` : "—"} detected={parsed.price != null} uncertain={isUncertain("prix_euros")}/>
+                    </>
+                  );
+                })()}
               </div>
+              {/* Bouton "Réenregistrer" affiché si confiance basse selon l'IA — laisse
+                  le chauffeur reprendre rapidement sans avoir à fermer la modale.
+                  La fonction startListening + reset s'appellent via les helpers existants. */}
+              {aiResult?.confiance === "basse" && (
+                <div className="tp-card" style={{ marginTop: 12, padding: 10, background: "rgba(248,113,113,0.08)", borderColor: "rgba(248,113,113,0.25)" }}>
+                  <div style={{ fontSize: 11, color: "var(--error, #f87171)", display: "flex", alignItems: "flex-start", gap: 6, lineHeight: 1.4, marginBottom: 8 }}>
+                    <AlertCircle size={12} style={{ flexShrink: 0, marginTop: 1 }}/>
+                    <span>L'IA n'est pas sûre du résultat. Vérifiez les champs ⚠️ ou réenregistrez.</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      // Reset complet et relancement immédiat de la dictée
+                      setAiResult(null);
+                      setAiError("");
+                      // start() s'occupe déjà de réinitialiser transcript / finalTranscript /
+                      // finalTranscriptRef / error en interne (cf. ligne 898+).
+                      start();
+                    }}
+                    className="tp-btn tp-btn-outline"
+                    style={{ width: "100%", padding: "10px 14px", fontSize: 13 }}
+                  >
+                    <Mic size={14}/> Réenregistrer la dictée
+                  </button>
+                </div>
+              )}
+
               <button onClick={confirm} className="tp-btn tp-btn-primary" style={{ width: "100%", marginTop: 14, padding: "14px 16px", fontSize: 15 }}>
                 <Check size={18}/> Créer le bon de course
               </button>
@@ -1072,20 +1219,23 @@ function VoiceCapture({ open, onClose, onConfirm }) {
   );
 }
 
-function FieldRow({ icon: Icon, label, value, detected }) {
+function FieldRow({ icon: Icon, label, value, detected, uncertain }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
       <div style={{
         width: 32, height: 32, borderRadius: 8,
-        background: detected ? "var(--accent-soft)" : "var(--surface-3)",
-        color: detected ? "var(--accent)" : "var(--muted)",
+        background: uncertain ? "rgba(251,191,36,0.15)" : (detected ? "var(--accent-soft)" : "var(--surface-3)"),
+        color: uncertain ? "var(--warn, #fbbf24)" : (detected ? "var(--accent)" : "var(--muted)"),
         display: "flex", alignItems: "center", justifyContent: "center",
       }}><Icon size={15}/></div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+        <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", display: "flex", alignItems: "center", gap: 6 }}>
+          {label}
+          {uncertain && <span title="Ce champ pourrait être incorrect — vérifiez avant de valider" style={{ color: "var(--warn, #fbbf24)" }}>⚠️</span>}
+        </div>
         <div style={{ fontSize: 13, fontWeight: detected ? 600 : 400, color: detected ? "var(--text)" : "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</div>
       </div>
-      {detected && <Check size={14} style={{ color: "var(--success)", flexShrink: 0 }}/>}
+      {detected && !uncertain && <Check size={14} style={{ color: "var(--success)", flexShrink: 0 }}/>}
     </div>
   );
 }

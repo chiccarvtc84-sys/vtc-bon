@@ -329,8 +329,13 @@ Projet `olmhckwethdcxhvsrfie` (`trajetpro-prod`, région West EU - Paris).
 | Fonction | JWT | Version | Statut |
 |---|---|---|---|
 | `verify-siret` | non (anonyme OK) | 3 | ACTIVE |
-| `create-checkout-session` | oui | **6** | ACTIVE — priceIds compte utilisateur, validation clé Stripe au démarrage |
+| `create-checkout-session` | oui | **12** | ACTIVE — Live mode (priceIds Live) |
 | `stripe-webhook` | non (signature vérifiée) | 2 | ACTIVE |
+| `voice-extract` | oui | **1** | ACTIVE — Claude Sonnet 4.6 + prompt caching, dictée vocale intelligente |
+
+### Secret `ANTHROPIC_API_KEY` (Supabase Edge Functions)
+
+Ajouté pour la fonction `voice-extract`. Clé `sk-ant-…` à récupérer sur [console.anthropic.com](https://console.anthropic.com/settings/keys). À roter immédiatement si exposée dans un chat ou un commit (anti-pattern : clé partagée dans le chat session 2026-05-01 — déjà signalée).
 
 ### Migrations SQL appliquées dans cette session (en plus des 6 historiques)
 
