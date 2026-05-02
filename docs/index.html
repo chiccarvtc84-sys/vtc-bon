@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="TrajetPro — application de gestion pour chauffeurs VTC : bons de course, factures, dictée vocale.">
+  <title>TrajetPro — Application VTC pour chauffeurs indépendants</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="tp-header">
+    <div class="tp-header-inner">
+      <a href="index.html" class="tp-logo">TP <span>TrajetPro</span></a>
+      <nav class="tp-nav">
+        <a href="privacy.html">Confidentialité</a>
+        <a href="terms.html">CGU</a>
+        <a href="legal.html">Mentions légales</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="tp-container">
+    <section class="tp-hero">
+      <h1>TrajetPro</h1>
+      <p>L'application qui simplifie la vie des chauffeurs VTC indépendants — bons de course conformes au décret 2017-483, factures réglementaires, dictée vocale intelligente.</p>
+    </section>
+
+    <section>
+      <h2 style="text-align:center; border:none;">Documents légaux</h2>
+      <div class="tp-cards">
+        <a href="privacy.html" class="tp-card">
+          <p class="tp-card-title">Politique de confidentialité</p>
+          <p class="tp-card-desc">Comment vos données sont collectées, traitées et protégées (RGPD).</p>
+        </a>
+        <a href="terms.html" class="tp-card">
+          <p class="tp-card-title">Conditions Générales d'Utilisation</p>
+          <p class="tp-card-desc">Règles d'utilisation de l'application, système de crédits, parrainage.</p>
+        </a>
+        <a href="legal.html" class="tp-card">
+          <p class="tp-card-title">Mentions légales</p>
+          <p class="tp-card-desc">Éditeur, hébergeur, contact, propriété intellectuelle.</p>
+        </a>
+      </div>
+    </section>
+
+    <section style="margin-top:4rem;">
+      <h2>Contact</h2>
+      <p>
+        Pour toute question ou demande relative à TrajetPro :<br>
+        <strong>Email</strong> : <a href="mailto:contact@trajetpro.fr">contact@trajetpro.fr</a>
+      </p>
+    </section>
+
+    <footer class="tp-footer">
+      <p>© <span id="year">2026</span> TrajetPro · Tous droits réservés · Conforme au décret n° 2017-483</p>
+    </footer>
+  </main>
+
+  <script>
+    document.getElementById('year').textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>

@@ -5,12 +5,15 @@
 // à partir d'un SVG inline, puis lance @capacitor/assets pour produire
 // toutes les déclinaisons iOS et Android.
 //
-// Lance via : node scripts/generate-assets.mjs
-// (déjà branché dans package.json sous `npm run assets`)
+// Lance via : npm run assets
+// (qui enchaîne ce script + npx capacitor-assets generate)
 //
-// REMPLACER ces SVG par les vrais visuels TrajetPro quand tu en auras :
-// le logo officiel + un splash screen propre. En attendant, ce sont des
-// placeholders aux couleurs de la marque.
+// Design : monogramme serif "TP" or sur fond noir profond + wordmark
+// "TrajetPro" sur le splash. Aux couleurs de la charte (`#0B0B0D` /
+// `#F4B942`). Pour un design définitif "store-grade", remplacer
+// directement les fichiers `assets/icon.png` et `assets/splash.png`
+// avec ceux d'un graphiste, puis lancer `npx capacitor-assets generate`
+// (sans repasser par ce script).
 // ============================================================================
 
 import sharp from 'sharp';
@@ -24,76 +27,115 @@ const ASSETS_DIR = resolve(ROOT, 'assets');
 
 const COLORS = {
   bg: '#0B0B0D',
+  bgGradLight: '#1a1a22',
   gold: '#F4B942',
   goldDark: '#C99632',
+  goldLight: '#FFD27A',
   text: '#F5F5F4',
+  textMuted: '#A8A29E',
 };
 
-// --- ICON 1024×1024 ---
-// Carré arrondi doré + voiture stylisée + lettre T en typographie serif.
-// Apple/Google ne veulent PAS de transparence ni de coins arrondis
-// (ils les ajoutent eux-mêmes selon la plateforme).
+// Police serif — librsvg (utilisé par sharp) ne charge pas Fraunces (pas
+// installé sur le système Windows par défaut), on retombe sur Georgia
+// qui donne un rendu serif très proche et élégant.
+const SERIF = 'Georgia, "Times New Roman", "DejaVu Serif", serif';
+const SANS = '"Helvetica Neue", Arial, "DejaVu Sans", sans-serif';
+
+// ----------------------------------------------------------------------------
+// ICON 1024×1024
+// ----------------------------------------------------------------------------
+// Apple/Google n'aiment PAS la transparence ni les coins arrondis (ils
+// les rajoutent eux-mêmes selon la plateforme). Donc fond plein.
+//
+// Le monogramme doit rester lisible quand l'icône est rendue à 60×60 px
+// sur l'écran d'accueil iPhone — d'où une typographie épaisse, sans
+// fioriture, et un contraste fort or-sur-noir.
 const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="goldGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="${COLORS.gold}"/>
-      <stop offset="100%" stop-color="${COLORS.goldDark}"/>
-    </linearGradient>
-    <radialGradient id="bgGlow" cx="0.5" cy="0.4" r="0.6">
-      <stop offset="0%" stop-color="#1a1a20"/>
+    <radialGradient id="bgGlow" cx="0.5" cy="0.42" r="0.75">
+      <stop offset="0%" stop-color="${COLORS.bgGradLight}"/>
       <stop offset="100%" stop-color="${COLORS.bg}"/>
     </radialGradient>
+    <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${COLORS.goldLight}"/>
+      <stop offset="50%" stop-color="${COLORS.gold}"/>
+      <stop offset="100%" stop-color="${COLORS.goldDark}"/>
+    </linearGradient>
   </defs>
-  <!-- Fond plein (pas de transparence pour respecter les guidelines stores) -->
+
+  <!-- Fond plein (gradient subtil pour donner de la profondeur) -->
   <rect width="1024" height="1024" fill="url(#bgGlow)"/>
-  <!-- Cercle doré central -->
-  <circle cx="512" cy="512" r="380" fill="url(#goldGrad)"/>
-  <!-- Voiture stylisée (path simplifié inspiré de lucide-react Car) -->
-  <g transform="translate(512 512) scale(11) translate(-12 -12)" fill="none" stroke="${COLORS.bg}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/>
-    <circle cx="7" cy="17" r="2"/>
-    <path d="M9 17h6"/>
-    <circle cx="17" cy="17" r="2"/>
-  </g>
+
+  <!-- Monogramme TP centré, en serif épais -->
+  <text x="512" y="640" text-anchor="middle"
+        font-family='${SERIF}'
+        font-size="600" font-weight="700"
+        fill="url(#goldGrad)"
+        letter-spacing="-30">TP</text>
+
+  <!-- Fine ligne dorée en accent sous le monogramme -->
+  <rect x="372" y="730" width="280" height="6" fill="${COLORS.gold}" opacity="0.85"/>
+
+  <!-- Petit tag VTC discret en bas -->
+  <text x="512" y="850" text-anchor="middle"
+        font-family='${SANS}'
+        font-size="58" font-weight="600"
+        fill="${COLORS.text}"
+        letter-spacing="14"
+        opacity="0.85">VTC</text>
 </svg>`;
 
-// --- SPLASH 2732×2732 ---
-// Apple recommande un PNG carré de cette taille, centre avec ~33% du logo.
-// Capacitor le crop automatiquement aux bonnes tailles iOS et Android.
+// ----------------------------------------------------------------------------
+// SPLASH 2732×2732
+// ----------------------------------------------------------------------------
+// Apple recommande un PNG carré de cette taille, contenu utile centré
+// dans environ 1/3 du cadre. Capacitor le crop ensuite aux bonnes tailles.
 const splashSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="2732" height="2732" viewBox="0 0 2732 2732">
   <defs>
-    <radialGradient id="splashBg" cx="0.5" cy="0.5" r="0.7">
-      <stop offset="0%" stop-color="#1a1a20"/>
+    <radialGradient id="splashBg" cx="0.5" cy="0.45" r="0.75">
+      <stop offset="0%" stop-color="${COLORS.bgGradLight}"/>
       <stop offset="100%" stop-color="${COLORS.bg}"/>
     </radialGradient>
-    <linearGradient id="splashGold" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="${COLORS.gold}"/>
+    <linearGradient id="splashGold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${COLORS.goldLight}"/>
+      <stop offset="50%" stop-color="${COLORS.gold}"/>
       <stop offset="100%" stop-color="${COLORS.goldDark}"/>
     </linearGradient>
   </defs>
+
   <rect width="2732" height="2732" fill="url(#splashBg)"/>
-  <!-- Cercle doré (zone safe ~33% du carré) -->
-  <circle cx="1366" cy="1200" r="320" fill="url(#splashGold)"/>
-  <!-- Voiture -->
-  <g transform="translate(1366 1200) scale(13) translate(-12 -12)" fill="none" stroke="${COLORS.bg}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/>
-    <circle cx="7" cy="17" r="2"/>
-    <path d="M9 17h6"/>
-    <circle cx="17" cy="17" r="2"/>
-  </g>
-  <!-- Wordmark TrajetPro -->
-  <text x="1366" y="1700" text-anchor="middle"
-        font-family="Georgia, 'Times New Roman', serif"
-        font-size="180" font-weight="600"
-        fill="${COLORS.text}" letter-spacing="-3">
-    TrajetPro
-  </text>
-  <text x="1366" y="1820" text-anchor="middle"
-        font-family="-apple-system, 'Helvetica Neue', sans-serif"
-        font-size="60" font-weight="400"
-        fill="${COLORS.gold}" letter-spacing="6">
-    BONS DE COURSE · FACTURES
-  </text>
+
+  <!-- Monogramme TP, grande taille mais pas plein écran -->
+  <text x="1366" y="1180" text-anchor="middle"
+        font-family='${SERIF}'
+        font-size="540" font-weight="700"
+        fill="url(#splashGold)"
+        letter-spacing="-25">TP</text>
+
+  <!-- Ligne dorée d'accent -->
+  <rect x="1216" y="1250" width="300" height="4" fill="${COLORS.gold}" opacity="0.7"/>
+
+  <!-- Wordmark TrajetPro sous le monogramme -->
+  <text x="1366" y="1480" text-anchor="middle"
+        font-family='${SERIF}'
+        font-size="220" font-weight="600"
+        fill="${COLORS.text}"
+        letter-spacing="-5">TrajetPro</text>
+
+  <!-- Tagline en petites caps -->
+  <text x="1366" y="1620" text-anchor="middle"
+        font-family='${SANS}'
+        font-size="68" font-weight="500"
+        fill="${COLORS.gold}"
+        letter-spacing="14">BONS DE COURSE · FACTURES</text>
+
+  <!-- Mention discrète en bas (compatible iPhone safe-area) -->
+  <text x="1366" y="2540" text-anchor="middle"
+        font-family='${SANS}'
+        font-size="48" font-weight="400"
+        fill="${COLORS.textMuted}"
+        letter-spacing="6"
+        opacity="0.6">Conforme décret 2017-483</text>
 </svg>`;
 
 await mkdir(ASSETS_DIR, { recursive: true });
@@ -108,7 +150,8 @@ await sharp(Buffer.from(splashSvg))
   .png({ compressionLevel: 9 })
   .toFile(resolve(ASSETS_DIR, 'splash.png'));
 
-// Variante dark explicite (Capacitor en a besoin pour le dark mode iOS)
+// Capacitor a besoin d'une variante "dark" explicite pour le dark mode iOS.
+// On reprend le même rendu (notre fond est déjà sombre, donc identique).
 console.log('→ Génération splash-dark.png (2732×2732)…');
 await sharp(Buffer.from(splashSvg))
   .png({ compressionLevel: 9 })
