@@ -141,6 +141,67 @@ export async function signOut() {
 }
 
 /**
+ * Charge les paramètres de facturation de l'utilisateur (logo, toggles
+ * SIRET / N° VTC). Stockés dans `users.invoice_settings JSONB`.
+ *
+ * Renvoie un objet avec valeurs par défaut si la colonne est NULL ou
+ * vide — l'UI peut donc toujours faire `settings.show_siret` sans
+ * avoir à gérer undefined.
+ *
+ * @param {string} userId — auth.uid() de l'utilisateur
+ * @returns {Promise<{
+ *   logo_data_url: string|null,
+ *   show_siret: boolean,
+ *   show_vtc_number: boolean,
+ *   company_name?: string,
+ *   address?: string,
+ *   ...
+ * }>}
+ */
+export async function loadInvoiceSettings(userId) {
+  if (!userId) return { logo_data_url: null, show_siret: true, show_vtc_number: true };
+  const { data, error } = await supabase
+    .from('users')
+    .select('invoice_settings')
+    .eq('id', userId)
+    .single();
+  if (error) {
+    console.warn('[loadInvoiceSettings] échec :', error.message);
+    return { logo_data_url: null, show_siret: true, show_vtc_number: true };
+  }
+  const s = data?.invoice_settings || {};
+  return {
+    logo_data_url: s.logo_data_url ?? null,
+    show_siret: s.show_siret !== false, // default true si absent
+    show_vtc_number: s.show_vtc_number !== false,
+    company_name: s.company_name ?? null,
+    address: s.address ?? null,
+    ...s, // permettre d'autres champs étendus
+  };
+}
+
+/**
+ * Met à jour les paramètres de facturation. Merge avec l'existant
+ * pour préserver les autres champs.
+ *
+ * @param {string} userId
+ * @param {object} updates — partial settings à fusionner
+ */
+export async function updateInvoiceSettings(userId, updates) {
+  if (!userId) throw new Error('userId requis');
+  // Lit l'existant pour merger côté client (pas d'opération JSONB serveur
+  // pour éviter une RPC dédiée)
+  const current = await loadInvoiceSettings(userId);
+  const merged = { ...current, ...updates };
+  const { error } = await supabase
+    .from('users')
+    .update({ invoice_settings: merged })
+    .eq('id', userId);
+  if (error) throw new Error(`Échec mise à jour invoice_settings : ${error.message}`);
+  return merged;
+}
+
+/**
  * Sign in with Apple — Apple OAuth via Supabase Auth.
  *
  * Conforme :

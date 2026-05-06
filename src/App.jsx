@@ -39,6 +39,8 @@ import {
   isDisposableEmail as sbIsDisposableEmail,
   deleteMyAccount as sbDeleteMyAccount,
   signInWithApple as sbSignInWithApple,
+  loadInvoiceSettings as sbLoadInvoiceSettings,
+  updateInvoiceSettings as sbUpdateInvoiceSettings,
 } from './lib/supabase.js';
 import { watchNetwork, isNativePlatform, preferencesGet, preferencesSet } from './lib/platform.js';
 import { checkPasswordStrength, isPasswordPwned } from './lib/passwordSecurity.js';
@@ -1860,7 +1862,7 @@ function InvoicesScreen({ invoices, bookings, tokenBalance, onOpenInvoice, onGoT
 /* -------------------------------------------------------------------------
    INVOICE DETAIL
    ------------------------------------------------------------------------- */
-function InvoiceDetail({ invoice, booking, onBack }) {
+function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {} }) {
   if (!invoice) return null;
 
   // ─── Handlers branchés sur jsPDF + Capacitor Share + URL schemes ──────
@@ -1878,7 +1880,7 @@ function InvoiceDetail({ invoice, booking, onBack }) {
 
   const onDownload = async () => {
     try {
-      await downloadInvoicePdf(invoice, booking, DRIVER_PROFILE);
+      await downloadInvoicePdf(invoice, booking, DRIVER_PROFILE, invoiceSettings);
     } catch (e) {
       alert("Erreur lors de la génération du PDF : " + (e?.message || e));
     }
@@ -1886,7 +1888,7 @@ function InvoiceDetail({ invoice, booking, onBack }) {
 
   const onShareInvoice = async () => {
     try {
-      const blob = await buildInvoicePdf(invoice, booking, DRIVER_PROFILE);
+      const blob = await buildInvoicePdf(invoice, booking, DRIVER_PROFILE, invoiceSettings);
       await sharePdf(blob, filename, {
         title: `Facture ${invoice.number}`,
         text: summaryText,
@@ -1916,7 +1918,7 @@ function InvoiceDetail({ invoice, booking, onBack }) {
   // natif qui, lui, attache le PDF automatiquement → meilleure UX.
   const onEmail = async () => {
     try {
-      await downloadInvoicePdf(invoice, booking, DRIVER_PROFILE);
+      await downloadInvoicePdf(invoice, booking, DRIVER_PROFILE, invoiceSettings);
     } catch (_e) { /* on continue même si le download échoue */ }
     openMailto({
       subject: `Facture ${invoice.number} — TrajetPro`,
@@ -3830,7 +3832,7 @@ function ReferralScreen({ user, onBack }) {
 /* -------------------------------------------------------------------------
    SETTINGS SCREEN — Préférences
    ------------------------------------------------------------------------- */
-function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount }) {
+function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount, invoiceSettings = {}, onUpdateInvoiceSettings }) {
   const groups = [
     {
       title: "Affichage", items: [
@@ -3910,6 +3912,115 @@ function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount }) 
             </div>
           </div>
         ))}
+
+        {/* ─── Facturation : logo + toggles SIRET / VTC ────────────────
+            Le logo apparaîtra en haut à droite du PDF de facture.
+            Les toggles permettent de masquer SIRET ou n° VTC pour les
+            chauffeurs qui ne veulent pas les afficher (ex. SIREN au lieu
+            de SIRET, ou VTC en mode auto-entrepreneur sans n° pro). */}
+        <div>
+          <div className="tp-label" style={{ marginBottom: 8, padding: "0 2px" }}>Facturation</div>
+
+          {/* Logo de l'entreprise */}
+          <div className="tp-card" style={{ padding: 14, background: "var(--surface)", marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+              {invoiceSettings?.logo_data_url ? (
+                <img src={invoiceSettings.logo_data_url} alt="Logo"
+                  style={{ width: 56, height: 56, objectFit: "contain", borderRadius: 8, background: "#fff", padding: 4 }}/>
+              ) : (
+                <div style={{
+                  width: 56, height: 56, borderRadius: 8, background: "var(--surface-2)",
+                  display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)",
+                }}>
+                  <Building2 size={22}/>
+                </div>
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>Logo de l'entreprise</div>
+                <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, lineHeight: 1.4 }}>
+                  {invoiceSettings?.logo_data_url
+                    ? "Affiché en haut à droite de chaque facture PDF"
+                    : "Aucun logo. PNG ou JPG, max 2 Mo. S'affichera en haut à droite des PDF."}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: invoiceSettings?.logo_data_url ? "1fr 1fr" : "1fr", gap: 8 }}>
+              <label className="tp-btn tp-btn-ghost" style={{ cursor: "pointer", justifyContent: "center", fontSize: 12 }}>
+                <Edit3 size={13}/> {invoiceSettings?.logo_data_url ? "Changer" : "Ajouter un logo"}
+                <input type="file" accept="image/png,image/jpeg" style={{ display: "none" }}
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    if (file.size > 2 * 1024 * 1024) {
+                      alert("Logo trop volumineux (max 2 Mo). Compressez-le avant l'upload.");
+                      return;
+                    }
+                    // Redimensionne à max 300px de large via canvas pour
+                    // garder une row JSONB raisonnable (50KB de base64 max)
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                      const img = new Image();
+                      img.onload = () => {
+                        const MAX_W = 300;
+                        const scale = img.width > MAX_W ? MAX_W / img.width : 1;
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.width * scale;
+                        canvas.height = img.height * scale;
+                        const ctx = canvas.getContext('2d');
+                        ctx.fillStyle = '#ffffff';
+                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        const dataUrl = canvas.toDataURL('image/png', 0.92);
+                        onUpdateInvoiceSettings({ logo_data_url: dataUrl });
+                      };
+                      img.src = reader.result;
+                    };
+                    reader.readAsDataURL(file);
+                    e.target.value = ""; // permet de re-uploader le même fichier
+                  }}/>
+              </label>
+              {invoiceSettings?.logo_data_url && (
+                <button onClick={() => {
+                  if (window.confirm("Retirer le logo des factures ?")) {
+                    onUpdateInvoiceSettings({ logo_data_url: null });
+                  }
+                }} className="tp-btn tp-btn-ghost" style={{ color: "var(--error)", fontSize: 12, justifyContent: "center" }}>
+                  <Trash2 size={13}/> Retirer
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Toggles SIRET et VTC */}
+          <div className="tp-card" style={{ background: "var(--surface)", overflow: "hidden" }}>
+            {[
+              { id: 'show_siret', label: 'Afficher mon SIRET sur les factures', value: invoiceSettings?.show_siret !== false },
+              { id: 'show_vtc_number', label: 'Afficher mon n° VTC sur les factures', value: invoiceSettings?.show_vtc_number !== false },
+            ].map((t, i, arr) => (
+              <div key={t.id} style={{
+                padding: "14px 16px", display: "flex", alignItems: "center", gap: 12,
+                borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none",
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{t.label}</div>
+                </div>
+                <button onClick={() => onUpdateInvoiceSettings({ [t.id]: !t.value })}
+                  style={{
+                    width: 40, height: 22, borderRadius: 999,
+                    background: t.value ? "var(--accent)" : "var(--surface-3)",
+                    position: "relative", transition: "background 0.15s",
+                    border: "none", cursor: "pointer", flexShrink: 0,
+                  }}>
+                  <div style={{
+                    position: "absolute", top: 2, left: t.value ? 20 : 2,
+                    width: 18, height: 18, borderRadius: "50%", background: "#fff",
+                    transition: "left 0.15s",
+                  }}/>
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
 
         {/* Sélecteur multi-checkbox des rappels avant course.
             Visible uniquement si "Rappel de courses" est activé. */}
@@ -4405,6 +4516,15 @@ export default function App() {
   const [tokenHistory, setTokenHistory] = useState(INITIAL_TOKEN_HISTORY);
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
 
+  // ─── Paramètres de facturation (logo, toggles SIRET / VTC) ────────────
+  // Stockés dans `users.invoice_settings JSONB` côté Supabase.
+  // Chargés au login + rafraîchis quand le user les modifie via Settings.
+  const [invoiceSettings, setInvoiceSettings] = useState({
+    logo_data_url: null,
+    show_siret: true,
+    show_vtc_number: true,
+  });
+
   // --- UI state ---
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
@@ -4844,6 +4964,36 @@ export default function App() {
   };
 
   // --- Helper : recharge le solde + l'historique depuis Supabase ---
+  // ─── Charger les paramètres de facturation au login ──────────────────
+  // (logo, toggles SIRET/VTC). Re-fetch si l'user change.
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setInvoiceSettings({ logo_data_url: null, show_siret: true, show_vtc_number: true });
+      return;
+    }
+    let cancelled = false;
+    sbLoadInvoiceSettings(currentUser.id).then((s) => {
+      if (!cancelled) setInvoiceSettings(s);
+    });
+    return () => { cancelled = true; };
+  }, [currentUser?.id]);
+
+  // Handler pour modifier un paramètre de facturation (depuis Settings).
+  // Met à jour local + Supabase de manière optimiste.
+  const updateInvoiceSettings = async (updates) => {
+    setInvoiceSettings((prev) => ({ ...prev, ...updates }));
+    if (currentUser?.id) {
+      try {
+        await sbUpdateInvoiceSettings(currentUser.id, updates);
+      } catch (err) {
+        alert("Échec de l'enregistrement : " + (err?.message || err));
+        // Recharge depuis Supabase pour annuler le changement local
+        const fresh = await sbLoadInvoiceSettings(currentUser.id);
+        setInvoiceSettings(fresh);
+      }
+    }
+  };
+
   // Utilisé après chaque opération qui modifie token_balance via le serveur,
   // pour rester en sync avec la "source unique de vérité" (token_transactions).
   const refreshTokens = async () => {
@@ -5170,7 +5320,7 @@ export default function App() {
     />;
   } else if (detailInvoice) {
     const relatedBooking = bookings.find(b => b.id === detailInvoice.bookingId);
-    screen = <InvoiceDetail invoice={detailInvoice} booking={relatedBooking} onBack={() => setDetailInvoice(null)}/>;
+    screen = <InvoiceDetail invoice={detailInvoice} booking={relatedBooking} onBack={() => setDetailInvoice(null)} invoiceSettings={invoiceSettings}/>;
   } else if (formOpen) {
     screen = <BookingForm
       initial={formInitial}
@@ -5207,7 +5357,9 @@ export default function App() {
         screen = <ReferralScreen user={currentUser} onBack={() => setTab("profile")}/>;
         break;
       case "settings":
-        screen = <SettingsScreen onBack={() => setTab("profile")} preferences={preferences} onChangePref={onChangePref} onDeleteAccount={handleDeleteAccount}/>;
+        screen = <SettingsScreen onBack={() => setTab("profile")} preferences={preferences} onChangePref={onChangePref} onDeleteAccount={handleDeleteAccount}
+          invoiceSettings={invoiceSettings}
+          onUpdateInvoiceSettings={updateInvoiceSettings}/>;
         break;
       case "terms":
         screen = <TermsScreen onBack={() => setTab("profile")}/>;

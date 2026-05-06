@@ -1,23 +1,45 @@
 // ============================================================================
-// invoicePdf.js — génération de la facture PDF conforme CGI français
+// invoicePdf.js — Génération PDF de la facture
 // ============================================================================
-// Utilise jsPDF (pure JS, pas de dépendance native) pour produire un PDF
-// téléchargeable depuis web ET mobile (Capacitor WebView).
+// Layout v2 (refonte 2026-05-06 sur demande utilisateur) :
 //
-// Format : A4 portrait (210 × 297 mm), texte uniquement (pas de logo image
-// pour rester léger et garantir un rendu identique partout).
-//
-// Conformité :
-//   - Mentions obligatoires CGI : SIRET, n° TVA, adresse, mention TVA 10 %
-//   - Décret 2017-483 : n° VTC, carte pro, immatriculation, modèle véhicule
-//   - Numérotation chronologique (générée côté Supabase, formatée FAC-AAAA-NNNN)
-//   - Empreinte fiscale SHA-256 + QR code intégré
-//   - Date d'émission, date de prestation, conditions de paiement
+//   ┌───────────────────────────────────────────────────────────────┐
+//   │                                            ┌──────┐  Logo     │
+//   │                                            └──────┘  optionnel │
+//   │                                            FAC-2026-0001       │
+//   │                                            06/05/2026          │
+//   ├───────────────────────────────────────────────────────────────┤
+//   │ ÉMETTEUR                       FACTURÉ À                       │
+//   │ Nom de société                 Nom du client                   │
+//   │ Adresse                        (adresse client si dispo)       │
+//   │ Email                                                          │
+//   │ Téléphone                                                      │
+//   │ SIRET (toggle ON/OFF)                                          │
+//   │ N° VTC (toggle ON/OFF)                                         │
+//   ├───────────────────────────────────────────────────────────────┤
+//   │ TRAJET EFFECTUÉ                                                │
+//   │ Le 06/05/2026 à 14:30                                          │
+//   │ Prise en charge : ...                                          │
+//   │ Destination     : ...                                          │
+//   │ Distance / Durée                                               │
+//   ├───────────────────────────────────────────────────────────────┤
+//   │ Montant HT     |  TVA 10%     |   Total TTC                    │
+//   ├───────────────────────────────────────────────────────────────┤
+//   │ [QR code]  Empreinte fiscale SHA-256 + mention contrôle        │
+//   ├───────────────────────────────────────────────────────────────┤
+//   │ Mentions légales (décret 2017-483, art. L441-10, etc.)         │
+//   └───────────────────────────────────────────────────────────────┘
 //
 // API publique :
-//   buildInvoicePdf(invoice, booking, driverProfile)  → renvoie un Blob PDF
-//   downloadInvoicePdf(...)                           → déclenche le download web
-//   getInvoicePdfDataUri(...)                         → renvoie data:application/pdf;base64,...
+//   buildInvoicePdf(invoice, booking, profile, settings)  → Blob PDF
+//   downloadInvoicePdf(...)                               → download web
+//   getInvoicePdfDataUri(...)                             → data URI base64
+//
+// `settings` (4e arg) accepte :
+//   - logo_data_url   : data:image/...;base64,... (PNG/JPG, max ~300px)
+//   - show_siret      : bool, masquer la ligne SIRET si false
+//   - show_vtc_number : bool, masquer la ligne n° VTC si false
+//   - company_name, address (string|object), email, phone : overrides
 // ============================================================================
 
 import { jsPDF } from 'jspdf';
@@ -38,223 +60,304 @@ const PAGE = { width: 210, height: 297, margin: 18 };
 function eur(n) {
   if (typeof n !== 'number' || isNaN(n)) n = 0;
   return new Intl.NumberFormat('fr-FR', {
-    style: 'currency',
-    currency: 'EUR',
-    minimumFractionDigits: 2,
+    style: 'currency', currency: 'EUR', minimumFractionDigits: 2,
   }).format(n);
 }
 
-function formatDate(d) {
+// Format demandé : 06/05/2026 (XX/XX/20XX)
+function formatDateShort(d) {
   if (!d) return '';
   const date = typeof d === 'string' ? new Date(d) : d;
   if (isNaN(date.getTime())) return '';
-  return date.toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yyyy = date.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
 }
 
-function formatDateTime(d) {
+// Format avec heure : 06/05/2026 à 14:30
+function formatDateTimeShort(d) {
   if (!d) return '';
   const date = typeof d === 'string' ? new Date(d) : d;
   if (isNaN(date.getTime())) return '';
-  return date.toLocaleString('fr-FR', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  });
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yyyy = date.getFullYear();
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mn = String(date.getMinutes()).padStart(2, '0');
+  return `${dd}/${mm}/${yyyy} à ${hh}:${mn}`;
 }
 
 /**
  * Construit le PDF de la facture et retourne un Blob.
- * Asynchrone à cause de la génération du QR code.
+ *
+ * @param {object} invoice  — { number, date, customerName, amount, vatAmount, fingerprint, status }
+ * @param {object} booking  — { dateTime, pickupAddress, dropoffAddress, distance, duration, passengers }
+ * @param {object} profile  — DRIVER_PROFILE (companyName, siret, vtcNumber, etc.)
+ * @param {object} settings — { logo_data_url, show_siret, show_vtc_number }
  */
-export async function buildInvoicePdf(invoice, booking, driverProfile) {
+export async function buildInvoicePdf(invoice, booking, profile, settings = {}) {
   const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
   const pageW = PAGE.width;
+  const pageH = PAGE.height;
   const margin = PAGE.margin;
-  let y = margin;
+  const colMid = pageW / 2;
 
-  // ---- En-tête : bandeau doré "TrajetPro" --------------------------------
-  pdf.setFillColor(COLORS.bg);
-  pdf.rect(0, 0, pageW, 32, 'F');
+  const showSiret = settings.show_siret !== false;
+  const showVtcNumber = settings.show_vtc_number !== false;
+  const logoDataUrl = settings.logo_data_url || null;
 
+  // Override possibles depuis settings, sinon profile
+  const companyName = settings.company_name || profile.companyName || `${profile.firstName || ''} ${profile.lastName || ''}`.trim();
+  const address = settings.address || profile.address || profile.baseCity || '';
+  const email = settings.email || profile.email || '';
+  const phone = settings.phone || profile.phone || '';
+
+  // ─── Bandeau supérieur : numéro + date à droite, logo si présent ────
+  let topY = margin;
+  const rightX = pageW - margin;
+
+  // Logo en haut à droite (si fourni)
+  if (logoDataUrl && typeof logoDataUrl === 'string' && logoDataUrl.startsWith('data:')) {
+    try {
+      // On dimensionne le logo à max 30mm de large × 30mm de haut
+      const LOGO_MAX = 28;
+      pdf.addImage(logoDataUrl, 'PNG', rightX - LOGO_MAX, topY, LOGO_MAX, LOGO_MAX, undefined, 'FAST');
+    } catch (e) {
+      console.warn('[invoicePdf] échec ajout logo :', e?.message);
+    }
+  }
+
+  // Numéro de facture sous le logo (ou en haut à droite si pas de logo)
+  const numberY = logoDataUrl ? topY + 34 : topY + 8;
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(14);
+  pdf.setTextColor(COLORS.text);
+  pdf.text(invoice.number || invoice.invoice_number || 'FAC-XXXX', rightX, numberY, { align: 'right' });
+
+  // Date en dessous
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(10);
+  pdf.setTextColor(COLORS.textMuted);
+  pdf.text(formatDateShort(invoice.date || invoice.issued_at || new Date()), rightX, numberY + 5, { align: 'right' });
+
+  // Titre "FACTURE" à gauche
   pdf.setFont('times', 'bold');
-  pdf.setTextColor(COLORS.gold);
-  pdf.setFontSize(28);
-  pdf.text('TrajetPro', margin, 20);
+  pdf.setFontSize(26);
+  pdf.setTextColor(COLORS.goldDark);
+  pdf.text('FACTURE', margin, topY + 12);
 
-  pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(8);
-  pdf.setTextColor('#cccccc');
-  pdf.text('FACTURE — Bon de transport VTC', margin, 26);
-
-  // Numéro et date à droite du bandeau
-  pdf.setFontSize(10);
-  pdf.setTextColor('#ffffff');
-  pdf.setFont('helvetica', 'bold');
-  pdf.text(invoice.number || invoice.invoice_number || 'FAC-XXXX', pageW - margin, 16, { align: 'right' });
-  pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(8);
-  pdf.text(`Émise le ${formatDate(invoice.date || invoice.issued_at)}`, pageW - margin, 22, { align: 'right' });
-
-  y = 44;
-
-  // ---- Émetteur (chauffeur) ---------------------------------------------
-  pdf.setTextColor(COLORS.text);
-  pdf.setFont('helvetica', 'bold');
-  pdf.setFontSize(9);
-  pdf.text('ÉMETTEUR', margin, y);
-
-  y += 5;
-  pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(10);
-  const driverName = `${driverProfile.firstName || ''} ${driverProfile.lastName || ''}`.trim() || 'Chauffeur VTC';
-  pdf.setFont('helvetica', 'bold');
-  pdf.text(driverName, margin, y);
-  pdf.setFont('helvetica', 'normal');
-
-  y += 5;
-  pdf.setFontSize(9);
-  pdf.setTextColor(COLORS.textMuted);
-  if (driverProfile.companyName) {
-    pdf.text(driverProfile.companyName, margin, y);
-    y += 4;
-  }
-  pdf.text(`SIRET : ${driverProfile.siret || '—'}`, margin, y);
-  y += 4;
-  pdf.text(`N° VTC : ${driverProfile.vtcNumber || '—'}`, margin, y);
-  y += 4;
-  pdf.text(`Carte pro. conducteur : ${driverProfile.proCardNumber || '—'}`, margin, y);
-  y += 4;
-  pdf.text(`Véhicule : ${driverProfile.vehicleModel || '—'} · ${driverProfile.vehiclePlate || '—'}`, margin, y);
-  y += 4;
-  if (driverProfile.email) {
-    pdf.text(`Contact : ${driverProfile.email}`, margin, y);
-    y += 4;
-  }
-
-  // ---- Client (à droite) ------------------------------------------------
-  let clientY = 44;
-  const clientX = pageW / 2 + 4;
-  pdf.setTextColor(COLORS.text);
-  pdf.setFont('helvetica', 'bold');
-  pdf.setFontSize(9);
-  pdf.text('FACTURÉ À', clientX, clientY);
-  clientY += 5;
-
-  pdf.setFont('helvetica', 'bold');
-  pdf.setFontSize(10);
-  pdf.text(invoice.customerName || invoice.customer_name || 'Client', clientX, clientY);
-  clientY += 5;
-
-  pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(9);
-  pdf.setTextColor(COLORS.textMuted);
-  pdf.text('Particulier · prestation transport', clientX, clientY);
-
-  // ---- Séparateur -------------------------------------------------------
-  y = Math.max(y, 88) + 4;
-  pdf.setDrawColor(COLORS.border);
-  pdf.setLineWidth(0.3);
-  pdf.line(margin, y, pageW - margin, y);
+  // ─── Séparateur ──────────────────────────────────────────────────────
+  let y = Math.max(numberY + 12, topY + 40);
+  pdf.setDrawColor(COLORS.gold);
+  pdf.setLineWidth(0.4);
+  pdf.line(margin, y, rightX, y);
   y += 8;
 
-  // ---- Détail de la prestation -----------------------------------------
-  pdf.setTextColor(COLORS.text);
+  // ─── 2 colonnes : Émetteur (gauche) / Facturé à (droite) ─────────────
+  const col1X = margin;
+  const col2X = colMid + 4;
+
+  // Headers
   pdf.setFont('helvetica', 'bold');
-  pdf.setFontSize(10);
-  pdf.text('PRESTATION', margin, y);
+  pdf.setFontSize(9);
+  pdf.setTextColor(COLORS.goldDark);
+  pdf.text('ÉMETTEUR', col1X, y);
+  pdf.text('FACTURÉ À', col2X, y);
+  y += 5;
+
+  // Émetteur (gauche)
+  let leftY = y;
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(11);
+  pdf.setTextColor(COLORS.text);
+  pdf.text(companyName || 'Société', col1X, leftY);
+  leftY += 5;
+
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(9);
+  pdf.setTextColor(COLORS.textMuted);
+
+  // Adresse (peut être multi-lignes)
+  if (address) {
+    const lines = String(address).split('\n').slice(0, 3); // max 3 lignes
+    for (const line of lines) {
+      pdf.text(line, col1X, leftY);
+      leftY += 4;
+    }
+  }
+  if (email) {
+    pdf.text(email, col1X, leftY);
+    leftY += 4;
+  }
+  if (phone) {
+    pdf.text(phone, col1X, leftY);
+    leftY += 4;
+  }
+  // SIRET (toggleable)
+  if (showSiret && profile.siret) {
+    pdf.text(`SIRET : ${profile.siret}`, col1X, leftY);
+    leftY += 4;
+  }
+  // N° VTC (toggleable)
+  if (showVtcNumber && profile.vtcNumber) {
+    pdf.text(`N° VTC : ${profile.vtcNumber}`, col1X, leftY);
+    leftY += 4;
+  }
+  // Carte pro (toujours, c'est une obligation décret 2017-483)
+  if (profile.proCardNumber) {
+    pdf.text(`Carte pro. : ${profile.proCardNumber}`, col1X, leftY);
+    leftY += 4;
+  }
+
+  // Facturé à (droite, en face)
+  let rightColY = y;
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(11);
+  pdf.setTextColor(COLORS.text);
+  pdf.text(invoice.customerName || invoice.customer_name || 'Client', col2X, rightColY);
+  rightColY += 5;
+
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(9);
+  pdf.setTextColor(COLORS.textMuted);
+  pdf.text('Particulier', col2X, rightColY);
+  rightColY += 4;
+
+  // Si on a un téléphone ou email client (booking.phone ou customer fields)
+  if (booking?.phone) {
+    pdf.text(`Tél. : ${booking.phone}`, col2X, rightColY);
+    rightColY += 4;
+  }
+
+  // ─── Séparateur après les 2 colonnes ─────────────────────────────────
+  y = Math.max(leftY, rightColY) + 6;
+  pdf.setDrawColor(COLORS.border);
+  pdf.setLineWidth(0.3);
+  pdf.line(margin, y, rightX, y);
+  y += 8;
+
+  // ─── Section TRAJET EFFECTUÉ ─────────────────────────────────────────
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(9);
+  pdf.setTextColor(COLORS.goldDark);
+  pdf.text('TRAJET EFFECTUÉ', margin, y);
   y += 6;
 
-  pdf.setFontSize(9);
   pdf.setFont('helvetica', 'normal');
-  pdf.setTextColor(COLORS.textMuted);
+  pdf.setFontSize(10);
+  pdf.setTextColor(COLORS.text);
 
   if (booking) {
-    pdf.text(
-      `Transport VTC du ${formatDateTime(booking.dateTime || booking.date_time)}`,
-      margin, y,
-    );
-    y += 4;
+    // Date et heure exacte du trajet (format XX/XX/20XX à HH:MM)
+    if (booking.dateTime || booking.date_time) {
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(`Le ${formatDateTimeShort(booking.dateTime || booking.date_time)}`, margin, y);
+      y += 6;
+    }
+
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(9);
+    pdf.setTextColor(COLORS.textMuted);
+
     if (booking.pickupAddress || booking.pickup_address) {
-      pdf.text(`Prise en charge : ${booking.pickupAddress || booking.pickup_address}`, margin, y);
-      y += 4;
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('Prise en charge :', margin, y);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text(`${booking.pickupAddress || booking.pickup_address}`, margin + 32, y);
+      y += 5;
     }
+
     if (booking.dropoffAddress || booking.dropoff_address) {
-      pdf.text(`Destination : ${booking.dropoffAddress || booking.dropoff_address}`, margin, y);
-      y += 4;
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('Destination :', margin, y);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text(`${booking.dropoffAddress || booking.dropoff_address}`, margin + 32, y);
+      y += 5;
     }
-    if (booking.passengers) {
-      pdf.text(`Passagers : ${booking.passengers}`, margin, y);
-      y += 4;
-    }
-    if (booking.distanceKm || booking.distance_km) {
-      pdf.text(`Distance : ${booking.distanceKm || booking.distance_km} km`, margin, y);
-      y += 4;
+
+    pdf.setFont('helvetica', 'normal');
+    const distKm = booking.distance || booking.distance_km;
+    const durMin = booking.duration || booking.duration_min;
+    const pax = booking.passengers;
+    const meta = [
+      distKm ? `${distKm} km` : null,
+      durMin ? `${durMin} min` : null,
+      pax ? `${pax} passager${pax > 1 ? 's' : ''}` : null,
+    ].filter(Boolean).join(' · ');
+    if (meta) {
+      pdf.setTextColor(COLORS.textMuted);
+      pdf.text(meta, margin, y);
+      y += 5;
     }
   } else {
-    pdf.text('Prestation de transport VTC', margin, y);
-    y += 4;
+    // Fallback si pas de booking : utiliser la date d'émission
+    pdf.setFontSize(9);
+    pdf.setTextColor(COLORS.textMuted);
+    pdf.text(`Prestation de transport VTC du ${formatDateShort(invoice.date || invoice.issued_at)}`, margin, y);
+    y += 5;
   }
 
-  // ---- Montants HT / TVA / TTC -----------------------------------------
-  y += 8;
+  // ─── Séparateur avant montants ──────────────────────────────────────
+  y += 4;
   pdf.setDrawColor(COLORS.border);
   pdf.setLineWidth(0.3);
-  pdf.line(margin, y, pageW - margin, y);
-  y += 6;
+  pdf.line(margin, y, rightX, y);
+  y += 8;
 
+  // ─── Montants HT / TVA / TTC ─────────────────────────────────────────
   const totalTTC = Number(invoice.amount || invoice.amount_ttc || 0);
   const vatAmount = Number(invoice.vatAmount || invoice.amount_vat || 0);
   const totalHT = totalTTC - vatAmount;
-  const vatRate = driverProfile.vatRate || 10;
+  const vatRate = profile.vatRate || 10;
 
   pdf.setFontSize(10);
   pdf.setFont('helvetica', 'normal');
   pdf.setTextColor(COLORS.textMuted);
   pdf.text('Montant HT', margin, y);
   pdf.setTextColor(COLORS.text);
-  pdf.text(eur(totalHT), pageW - margin, y, { align: 'right' });
+  pdf.text(eur(totalHT), rightX, y, { align: 'right' });
   y += 6;
 
   pdf.setTextColor(COLORS.textMuted);
   pdf.text(`TVA (${vatRate} %)`, margin, y);
   pdf.setTextColor(COLORS.text);
-  pdf.text(eur(vatAmount), pageW - margin, y, { align: 'right' });
+  pdf.text(eur(vatAmount), rightX, y, { align: 'right' });
   y += 8;
 
   // Total TTC en gros doré
   pdf.setDrawColor(COLORS.gold);
   pdf.setLineWidth(0.6);
-  pdf.line(margin, y - 2, pageW - margin, y - 2);
+  pdf.line(margin, y - 2, rightX, y - 2);
   pdf.setFont('times', 'bold');
   pdf.setFontSize(14);
   pdf.setTextColor(COLORS.text);
   pdf.text('Total TTC', margin, y + 5);
   pdf.setTextColor(COLORS.goldDark);
   pdf.setFontSize(20);
-  pdf.text(eur(totalTTC), pageW - margin, y + 6, { align: 'right' });
+  pdf.text(eur(totalTTC), rightX, y + 6, { align: 'right' });
   y += 14;
 
-  // ---- Empreinte fiscale + QR code -------------------------------------
-  y += 6;
+  // ─── Empreinte fiscale + QR code ─────────────────────────────────────
+  y += 4;
   pdf.setFillColor(COLORS.surface);
-  pdf.roundedRect(margin, y, pageW - margin * 2, 28, 2, 2, 'F');
+  pdf.roundedRect(margin, y, rightX - margin, 28, 2, 2, 'F');
 
   // QR code à gauche
   const qrPayload = JSON.stringify({
     n: invoice.number || invoice.invoice_number,
     fp: invoice.fingerprint,
     a: totalTTC,
-    d: invoice.date || invoice.issued_at,
+    d: formatDateShort(invoice.date || invoice.issued_at),
   });
   try {
     const qrDataUrl = await QRCode.toDataURL(qrPayload, {
-      width: 200,
-      margin: 1,
+      width: 200, margin: 1,
       color: { dark: COLORS.text, light: '#ffffff' },
     });
     pdf.addImage(qrDataUrl, 'PNG', margin + 3, y + 3, 22, 22);
   } catch (_e) { /* QR optionnel */ }
 
-  // Texte fingerprint à droite du QR
   pdf.setFontSize(8);
   pdf.setFont('helvetica', 'bold');
   pdf.setTextColor(COLORS.goldDark);
@@ -263,7 +366,6 @@ export async function buildInvoicePdf(invoice, booking, driverProfile) {
   pdf.setFont('courier', 'normal');
   pdf.setFontSize(7);
   pdf.setTextColor(COLORS.text);
-  // Coupe l'empreinte sur 2 lignes pour qu'elle tienne
   const fp = String(invoice.fingerprint || '').slice(0, 64);
   pdf.text(fp.slice(0, 32), margin + 28, y + 12);
   pdf.text(fp.slice(32, 64), margin + 28, y + 16);
@@ -275,7 +377,7 @@ export async function buildInvoicePdf(invoice, booking, driverProfile) {
 
   y += 34;
 
-  // ---- Mentions légales en bas -----------------------------------------
+  // ─── Mentions légales ───────────────────────────────────────────────
   pdf.setFontSize(7);
   pdf.setTextColor(COLORS.textMuted);
   pdf.setFont('helvetica', 'normal');
@@ -293,25 +395,26 @@ export async function buildInvoicePdf(invoice, booking, driverProfile) {
     y += 3.5;
   });
 
-  // ---- Footer fixe en bas de page --------------------------------------
-  const footerY = PAGE.height - 12;
+  // ─── Footer fixe en bas de page ──────────────────────────────────────
+  const footerY = pageH - 12;
   pdf.setDrawColor(COLORS.border);
   pdf.setLineWidth(0.2);
-  pdf.line(margin, footerY - 4, pageW - margin, footerY - 4);
+  pdf.line(margin, footerY - 4, rightX, footerY - 4);
   pdf.setFontSize(7);
   pdf.setTextColor(COLORS.textMuted);
-  pdf.text(`Page 1 / 1 · ${invoice.number || invoice.invoice_number || ''} · TrajetPro`, pageW / 2, footerY, { align: 'center' });
+  pdf.text(
+    `Page 1 / 1 · ${invoice.number || invoice.invoice_number || ''} · ${companyName}`,
+    pageW / 2, footerY, { align: 'center' }
+  );
 
   return pdf.output('blob');
 }
 
 /**
  * Déclenche un téléchargement client-side du PDF (web).
- * Sur mobile (Capacitor), utiliser plutôt sharePdf() depuis shareHelpers.js
- * qui propose le menu de partage natif (incluant "Enregistrer dans Fichiers").
  */
-export async function downloadInvoicePdf(invoice, booking, driverProfile) {
-  const blob = await buildInvoicePdf(invoice, booking, driverProfile);
+export async function downloadInvoicePdf(invoice, booking, profile, settings) {
+  const blob = await buildInvoicePdf(invoice, booking, profile, settings);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -324,12 +427,9 @@ export async function downloadInvoicePdf(invoice, booking, driverProfile) {
   }, 1000);
 }
 
-/**
- * Renvoie le PDF en data URI base64 — utile pour transmettre à Capacitor
- * Filesystem ou afficher dans un <embed>.
- */
-export async function getInvoicePdfDataUri(invoice, booking, driverProfile) {
-  const blob = await buildInvoicePdf(invoice, booking, driverProfile);
+/** Renvoie le PDF en data URI base64. */
+export async function getInvoicePdfDataUri(invoice, booking, profile, settings) {
+  const blob = await buildInvoicePdf(invoice, booking, profile, settings);
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
