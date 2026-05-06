@@ -3867,9 +3867,275 @@ function ReferralScreen({ user, onBack }) {
 }
 
 /* -------------------------------------------------------------------------
+   BILLING SCREEN — Configuration des factures (logo, champs toggleables…)
+   -------------------------------------------------------------------------
+   Page dédiée accessible depuis Préférences → Facturation. Toutes les
+   modifications sont mises en attente dans un état local et écrites en
+   base seulement après clic sur "Sauvegarder" (vs auto-save de la page
+   Préférences pour les toggles légers comme la langue).
+   ------------------------------------------------------------------------- */
+function BillingScreen({ onBack, invoiceSettings = {}, onUpdateInvoiceSettings }) {
+  // Form local, initialisé depuis les paramètres déjà sauvegardés. On
+  // garde la référence aux valeurs originales pour calculer le "dirty".
+  const [form, setForm] = useState({
+    logo_data_url: invoiceSettings.logo_data_url || null,
+    legal_form: invoiceSettings.legal_form || '',
+    show_legal_form: invoiceSettings.show_legal_form !== false,
+    vat_number: invoiceSettings.vat_number || '',
+    show_vat_number: invoiceSettings.show_vat_number !== false,
+    vehicle_plate: invoiceSettings.vehicle_plate || '',
+    show_vehicle_plate: invoiceSettings.show_vehicle_plate !== false,
+    vtc_number: invoiceSettings.vtc_number || '',
+    pro_card_number: invoiceSettings.pro_card_number || '',
+    vehicle_model: invoiceSettings.vehicle_model || '',
+    show_siret: invoiceSettings.show_siret !== false,
+    show_vtc_number: invoiceSettings.show_vtc_number !== false,
+  });
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState(0); // timestamp pour l'animation "✓ Enregistré"
+
+  // Recalcule l'état "modifié" en comparant avec invoiceSettings entrant
+  const isDirty = useMemo(() => {
+    const keys = Object.keys(form);
+    return keys.some((k) => {
+      const a = form[k];
+      const b = invoiceSettings[k];
+      // Normalise undefined ↔ null ↔ '' pour ne pas dirtify à la 1re saisie
+      const norm = (v) => (v === undefined || v === null) ? '' : v;
+      // Pour les bool, on compare avec la valeur effective (default true)
+      if (typeof a === 'boolean' || k.startsWith('show_')) {
+        return Boolean(a) !== Boolean(b !== false);
+      }
+      return norm(a) !== norm(b);
+    });
+  }, [form, invoiceSettings]);
+
+  const update = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onUpdateInvoiceSettings(form);
+      setSavedAt(Date.now());
+      // Dim le feedback visuel après 2 secondes
+      setTimeout(() => setSavedAt(0), 2200);
+    } catch (err) {
+      alert("Erreur lors de la sauvegarde : " + (err?.message || err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleBack = () => {
+    if (isDirty) {
+      const confirm = window.confirm(
+        "Vous avez des modifications non sauvegardées.\n\nQuitter sans sauvegarder ?"
+      );
+      if (!confirm) return;
+    }
+    onBack();
+  };
+
+  return (
+    <div className="tp-scroll tp-fade-in">
+      <TopBar title="Facturation" subtitle="Personnalisez vos factures PDF" onBack={handleBack}/>
+
+      <div style={{ padding: "0 20px 100px", display: "flex", flexDirection: "column", gap: 14 }}>
+        {/* Logo */}
+        <div className="tp-card" style={{ padding: 14, background: "var(--surface)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+            {form.logo_data_url ? (
+              <img src={form.logo_data_url} alt="Logo"
+                style={{ width: 56, height: 56, objectFit: "contain", borderRadius: 8, background: "#fff", padding: 4 }}/>
+            ) : (
+              <div style={{
+                width: 56, height: 56, borderRadius: 8, background: "var(--surface-2)",
+                display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)",
+              }}>
+                <Building2 size={22}/>
+              </div>
+            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Logo de l'entreprise</div>
+              <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, lineHeight: 1.4 }}>
+                {form.logo_data_url
+                  ? "Affiché en haut à droite de chaque facture PDF"
+                  : "PNG ou JPG, max 2 Mo. S'affichera en haut à droite des PDF."}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: form.logo_data_url ? "1fr 1fr" : "1fr", gap: 8 }}>
+            <label className="tp-btn tp-btn-ghost" style={{ cursor: "pointer", justifyContent: "center", fontSize: 12 }}>
+              <Edit3 size={13}/> {form.logo_data_url ? "Changer" : "Ajouter un logo"}
+              <input type="file" accept="image/png,image/jpeg" style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  if (file.size > 2 * 1024 * 1024) {
+                    alert("Logo trop volumineux (max 2 Mo). Compressez-le avant l'upload.");
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onload = () => {
+                    const img = new Image();
+                    img.onload = () => {
+                      const MAX_W = 300;
+                      const scale = img.width > MAX_W ? MAX_W / img.width : 1;
+                      const canvas = document.createElement('canvas');
+                      canvas.width = img.width * scale;
+                      canvas.height = img.height * scale;
+                      const ctx = canvas.getContext('2d');
+                      ctx.fillStyle = '#ffffff';
+                      ctx.fillRect(0, 0, canvas.width, canvas.height);
+                      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                      const dataUrl = canvas.toDataURL('image/png', 0.92);
+                      update('logo_data_url', dataUrl);
+                    };
+                    img.src = reader.result;
+                  };
+                  reader.readAsDataURL(file);
+                  e.target.value = "";
+                }}/>
+            </label>
+            {form.logo_data_url && (
+              <button onClick={() => update('logo_data_url', null)}
+                className="tp-btn tp-btn-ghost" style={{ color: "var(--error)", fontSize: 12, justifyContent: "center" }}>
+                <Trash2 size={13}/> Retirer
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Inputs sans toggle (toujours affichés sur la facture si renseignés) */}
+        {[
+          { id: 'vtc_number', label: 'N° d\'inscription VTC (EVTC)', placeholder: 'EVTCxxxxxxxxxx' },
+          { id: 'pro_card_number', label: 'N° de carte pro. conducteur', placeholder: 'VTC-XX-2024-XXXX' },
+          { id: 'vehicle_model', label: 'Modèle du véhicule', placeholder: 'Peugeot 508, Mercedes Classe E…' },
+        ].map((field) => (
+          <div key={field.id} className="tp-card" style={{ padding: 14, background: "var(--surface)" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
+            <input className="tp-input"
+              placeholder={field.placeholder}
+              value={form[field.id] || ''}
+              onChange={(e) => update(field.id, e.target.value)}/>
+          </div>
+        ))}
+
+        {/* Toggles simples (valeur lue depuis le profil user au moment du PDF) */}
+        <div className="tp-card" style={{ background: "var(--surface)", overflow: "hidden" }}>
+          {[
+            { id: 'show_siret', label: 'Afficher mon SIRET sur les factures' },
+            { id: 'show_vtc_number', label: 'Afficher mon n° VTC sur les factures' },
+          ].map((t, i, arr) => {
+            const value = form[t.id];
+            return (
+              <div key={t.id} style={{
+                padding: "14px 16px", display: "flex", alignItems: "center", gap: 12,
+                borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none",
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{t.label}</div>
+                </div>
+                <button onClick={() => update(t.id, !value)}
+                  style={{
+                    width: 40, height: 22, borderRadius: 999,
+                    background: value ? "var(--accent)" : "var(--surface-3)",
+                    position: "relative", transition: "background 0.15s",
+                    border: "none", cursor: "pointer", flexShrink: 0,
+                  }}>
+                  <div style={{
+                    position: "absolute", top: 2, left: value ? 20 : 2,
+                    width: 18, height: 18, borderRadius: "50%", background: "#fff",
+                    transition: "left 0.15s",
+                  }}/>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Inputs avec toggle d'affichage */}
+        {[
+          { id: 'legal_form', label: 'Forme juridique', placeholder: 'EI, SASU, EURL, SARL…', toggleId: 'show_legal_form' },
+          { id: 'vat_number', label: 'N° TVA intracommunautaire', placeholder: 'FR12345678901', toggleId: 'show_vat_number' },
+          { id: 'vehicle_plate', label: 'Immatriculation du véhicule', placeholder: 'AB-123-CD', toggleId: 'show_vehicle_plate' },
+        ].map((field) => {
+          const value = form[field.id] || '';
+          const visible = form[field.toggleId];
+          return (
+            <div key={field.id} className="tp-card" style={{ padding: 14, background: "var(--surface)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{field.label}</div>
+                  <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>
+                    {value
+                      ? (visible ? "Affiché sur les factures" : "Masqué sur les factures")
+                      : "Saisissez une valeur ci-dessous"}
+                  </div>
+                </div>
+                <button onClick={() => update(field.toggleId, !visible)}
+                  title={visible ? "Masquer sur les factures" : "Afficher sur les factures"}
+                  style={{
+                    width: 40, height: 22, borderRadius: 999,
+                    background: visible ? "var(--accent)" : "var(--surface-3)",
+                    position: "relative", transition: "background 0.15s",
+                    border: "none", cursor: "pointer", flexShrink: 0,
+                  }}>
+                  <div style={{
+                    position: "absolute", top: 2, left: visible ? 20 : 2,
+                    width: 18, height: 18, borderRadius: "50%", background: "#fff",
+                    transition: "left 0.15s",
+                  }}/>
+                </button>
+              </div>
+              <input className="tp-input"
+                placeholder={field.placeholder}
+                value={value}
+                onChange={(e) => update(field.id, e.target.value)}/>
+            </div>
+          );
+        })}
+
+        {/* Astuce */}
+        <div className="tp-card" style={{ padding: 12, background: "rgba(244,185,66,0.08)", borderColor: "rgba(244,185,66,0.2)" }}>
+          <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
+            <Info size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 6, color: "var(--accent)" }}/>
+            Le <b>nom de société</b>, le <b>SIRET</b> et l'<b>adresse</b> personnelle sont gérés depuis <b>Profil → Modifier mes infos</b>.
+          </div>
+        </div>
+      </div>
+
+      {/* Barre fixe en bas avec bouton Sauvegarder */}
+      <div style={{
+        position: "fixed", left: 0, right: 0, bottom: 0,
+        background: "linear-gradient(to top, var(--bg) 70%, transparent)",
+        padding: "16px 20px 24px", zIndex: 50,
+      }}>
+        <button onClick={handleSave}
+          disabled={saving || !isDirty}
+          className="tp-btn tp-btn-primary"
+          style={{
+            width: "100%", padding: "14px", fontSize: 15,
+            opacity: (saving || !isDirty) ? 0.55 : 1,
+            cursor: (saving || !isDirty) ? "default" : "pointer",
+          }}>
+          {saving
+            ? <><Loader2 size={16} style={{ animation: "tp-spin 1s linear infinite" }}/> Sauvegarde…</>
+            : (Date.now() - savedAt < 2000
+              ? <><CheckCircle2 size={16}/> Enregistré</>
+              : (isDirty
+                ? <><Check size={16}/> Sauvegarder les modifications</>
+                : <>Aucune modification à sauvegarder</>))}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------
    SETTINGS SCREEN — Préférences
    ------------------------------------------------------------------------- */
-function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount, invoiceSettings = {}, onUpdateInvoiceSettings }) {
+function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount, invoiceSettings = {}, onUpdateInvoiceSettings, onGoTab }) {
   const groups = [
     {
       title: "Affichage", items: [
@@ -3950,190 +4216,33 @@ function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount, in
           </div>
         ))}
 
-        {/* ─── Facturation : logo + toggles SIRET / VTC ────────────────
-            Le logo apparaîtra en haut à droite du PDF de facture.
-            Les toggles permettent de masquer SIRET ou n° VTC pour les
-            chauffeurs qui ne veulent pas les afficher (ex. SIREN au lieu
-            de SIRET, ou VTC en mode auto-entrepreneur sans n° pro). */}
+        {/* Item cliquable "Facturation" — ouvre la page BillingScreen
+            (logo, n° VTC, plaque, toggles, bouton Sauvegarder).
+            Le bloc inline d'avant a été déplacé dans la page dédiée. */}
         <div>
           <div className="tp-label" style={{ marginBottom: 8, padding: "0 2px" }}>Facturation</div>
-
-          {/* Logo de l'entreprise */}
-          <div className="tp-card" style={{ padding: 14, background: "var(--surface)", marginBottom: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
-              {invoiceSettings?.logo_data_url ? (
-                <img src={invoiceSettings.logo_data_url} alt="Logo"
-                  style={{ width: 56, height: 56, objectFit: "contain", borderRadius: 8, background: "#fff", padding: 4 }}/>
-              ) : (
-                <div style={{
-                  width: 56, height: 56, borderRadius: 8, background: "var(--surface-2)",
-                  display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)",
-                }}>
-                  <Building2 size={22}/>
-                </div>
-              )}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>Logo de l'entreprise</div>
-                <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, lineHeight: 1.4 }}>
-                  {invoiceSettings?.logo_data_url
-                    ? "Affiché en haut à droite de chaque facture PDF"
-                    : "Aucun logo. PNG ou JPG, max 2 Mo. S'affichera en haut à droite des PDF."}
-                </div>
+          <button onClick={() => onGoTab && onGoTab("billing")}
+            className="tp-card"
+            style={{
+              width: "100%", padding: "14px 16px", display: "flex",
+              alignItems: "center", gap: 12, cursor: "pointer", textAlign: "left",
+              background: "var(--surface)", border: "1px solid var(--border)",
+              borderRadius: 12, color: "var(--text)",
+            }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 9, background: "var(--accent-soft)",
+              color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+            }}>
+              <Receipt size={16}/>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Personnaliser mes factures</div>
+              <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>
+                Logo, n° VTC, plaque, forme juridique…
               </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: invoiceSettings?.logo_data_url ? "1fr 1fr" : "1fr", gap: 8 }}>
-              <label className="tp-btn tp-btn-ghost" style={{ cursor: "pointer", justifyContent: "center", fontSize: 12 }}>
-                <Edit3 size={13}/> {invoiceSettings?.logo_data_url ? "Changer" : "Ajouter un logo"}
-                <input type="file" accept="image/png,image/jpeg" style={{ display: "none" }}
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    if (file.size > 2 * 1024 * 1024) {
-                      alert("Logo trop volumineux (max 2 Mo). Compressez-le avant l'upload.");
-                      return;
-                    }
-                    // Redimensionne à max 300px de large via canvas pour
-                    // garder une row JSONB raisonnable (50KB de base64 max)
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                      const img = new Image();
-                      img.onload = () => {
-                        const MAX_W = 300;
-                        const scale = img.width > MAX_W ? MAX_W / img.width : 1;
-                        const canvas = document.createElement('canvas');
-                        canvas.width = img.width * scale;
-                        canvas.height = img.height * scale;
-                        const ctx = canvas.getContext('2d');
-                        ctx.fillStyle = '#ffffff';
-                        ctx.fillRect(0, 0, canvas.width, canvas.height);
-                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                        const dataUrl = canvas.toDataURL('image/png', 0.92);
-                        onUpdateInvoiceSettings({ logo_data_url: dataUrl });
-                      };
-                      img.src = reader.result;
-                    };
-                    reader.readAsDataURL(file);
-                    e.target.value = ""; // permet de re-uploader le même fichier
-                  }}/>
-              </label>
-              {invoiceSettings?.logo_data_url && (
-                <button onClick={() => {
-                  if (window.confirm("Retirer le logo des factures ?")) {
-                    onUpdateInvoiceSettings({ logo_data_url: null });
-                  }
-                }} className="tp-btn tp-btn-ghost" style={{ color: "var(--error)", fontSize: 12, justifyContent: "center" }}>
-                  <Trash2 size={13}/> Retirer
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Champs sans toggle — toujours affichés sur le PDF s'ils sont
-              renseignés. Ce sont les infos d'identité de l'entreprise qui
-              n'ont aucune raison d'être masquées. Si l'input est vide, la
-              ligne disparaît automatiquement du PDF. */}
-          {[
-            { id: 'company_name', label: 'Nom commercial / société', placeholder: 'CHIC CAR 84' },
-            { id: 'address', label: 'Adresse complète', placeholder: '16 rue des filles, 84000 Avignon', multiline: true },
-            { id: 'vtc_number', label: 'N° d\'inscription VTC (EVTC)', placeholder: 'EVTCxxxxxxxxxx' },
-            { id: 'pro_card_number', label: 'N° de carte pro. conducteur', placeholder: 'VTC-XX-2024-XXXX' },
-            { id: 'vehicle_model', label: 'Modèle du véhicule', placeholder: 'Peugeot 508, Mercedes Classe E…' },
-          ].map((field) => {
-            const value = invoiceSettings?.[field.id] || '';
-            return (
-              <div key={field.id} className="tp-card" style={{ padding: 14, background: "var(--surface)", marginBottom: 8 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
-                {field.multiline ? (
-                  <textarea className="tp-input"
-                    rows={2}
-                    placeholder={field.placeholder}
-                    value={value}
-                    style={{ resize: "vertical", minHeight: 56, fontFamily: "inherit" }}
-                    onChange={(e) => onUpdateInvoiceSettings({ [field.id]: e.target.value })}/>
-                ) : (
-                  <input className="tp-input"
-                    placeholder={field.placeholder}
-                    value={value}
-                    onChange={(e) => onUpdateInvoiceSettings({ [field.id]: e.target.value })}/>
-                )}
-              </div>
-            );
-          })}
-
-          {/* Toggles simples (valeur lue depuis le profil user) */}
-          <div className="tp-card" style={{ background: "var(--surface)", overflow: "hidden", marginBottom: 8 }}>
-            {[
-              { id: 'show_siret', label: 'Afficher mon SIRET sur les factures', value: invoiceSettings?.show_siret !== false },
-              { id: 'show_vtc_number', label: 'Afficher mon n° VTC sur les factures', value: invoiceSettings?.show_vtc_number !== false },
-            ].map((t, i, arr) => (
-              <div key={t.id} style={{
-                padding: "14px 16px", display: "flex", alignItems: "center", gap: 12,
-                borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none",
-              }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{t.label}</div>
-                </div>
-                <button onClick={() => onUpdateInvoiceSettings({ [t.id]: !t.value })}
-                  style={{
-                    width: 40, height: 22, borderRadius: 999,
-                    background: t.value ? "var(--accent)" : "var(--surface-3)",
-                    position: "relative", transition: "background 0.15s",
-                    border: "none", cursor: "pointer", flexShrink: 0,
-                  }}>
-                  <div style={{
-                    position: "absolute", top: 2, left: t.value ? 20 : 2,
-                    width: 18, height: 18, borderRadius: "50%", background: "#fff",
-                    transition: "left 0.15s",
-                  }}/>
-                </button>
-              </div>
-            ))}
-          </div>
-
-          {/* Champs avec valeur saisie + toggle d'affichage.
-              Si l'input est vide → la ligne ne s'affiche pas sur le PDF
-              même si le toggle est ON. C'est volontaire pour éviter une
-              ligne "Forme juridique : " avec rien après. */}
-          {[
-            { id: 'legal_form', label: 'Forme juridique', placeholder: 'EI, SASU, EURL, SARL…', toggleId: 'show_legal_form' },
-            { id: 'vat_number', label: 'N° TVA intracommunautaire', placeholder: 'FR12345678901', toggleId: 'show_vat_number' },
-            { id: 'vehicle_plate', label: 'Immatriculation du véhicule', placeholder: 'AB-123-CD', toggleId: 'show_vehicle_plate' },
-          ].map((field) => {
-            const value = invoiceSettings?.[field.id] || '';
-            const visible = invoiceSettings?.[field.toggleId] !== false;
-            return (
-              <div key={field.id} className="tp-card" style={{ padding: 14, background: "var(--surface)", marginBottom: 8 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{field.label}</div>
-                    <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>
-                      {value
-                        ? (visible ? "Affiché sur les factures" : "Masqué sur les factures")
-                        : "Saisissez une valeur ci-dessous"}
-                    </div>
-                  </div>
-                  <button onClick={() => onUpdateInvoiceSettings({ [field.toggleId]: !visible })}
-                    title={visible ? "Masquer sur les factures" : "Afficher sur les factures"}
-                    style={{
-                      width: 40, height: 22, borderRadius: 999,
-                      background: visible ? "var(--accent)" : "var(--surface-3)",
-                      position: "relative", transition: "background 0.15s",
-                      border: "none", cursor: "pointer", flexShrink: 0,
-                    }}>
-                    <div style={{
-                      position: "absolute", top: 2, left: visible ? 20 : 2,
-                      width: 18, height: 18, borderRadius: "50%", background: "#fff",
-                      transition: "left 0.15s",
-                    }}/>
-                  </button>
-                </div>
-                <input className="tp-input"
-                  placeholder={field.placeholder}
-                  value={value}
-                  onChange={(e) => onUpdateInvoiceSettings({ [field.id]: e.target.value })}/>
-              </div>
-            );
-          })}
+            <ChevronRight size={16} style={{ color: "var(--text-dim)", flexShrink: 0 }}/>
+          </button>
         </div>
 
         {/* Sélecteur multi-checkbox des rappels avant course.
@@ -5474,6 +5583,12 @@ export default function App() {
         break;
       case "settings":
         screen = <SettingsScreen onBack={() => setTab("profile")} preferences={preferences} onChangePref={onChangePref} onDeleteAccount={handleDeleteAccount}
+          invoiceSettings={invoiceSettings}
+          onUpdateInvoiceSettings={updateInvoiceSettings}
+          onGoTab={setTab}/>;
+        break;
+      case "billing":
+        screen = <BillingScreen onBack={() => setTab("settings")}
           invoiceSettings={invoiceSettings}
           onUpdateInvoiceSettings={updateInvoiceSettings}/>;
         break;
