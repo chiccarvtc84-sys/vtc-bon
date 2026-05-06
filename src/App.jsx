@@ -2770,32 +2770,32 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
 
           <div style={fieldStyle}>
             <div style={labelStyle}>SIRET (14 chiffres)</div>
-            <input className="tp-input" value={form.siret} onChange={e => update("siret", e.target.value.replace(/[^0-9 ]/g, ""))} placeholder="91851179100033" inputMode="numeric"/>
+            <input className="tp-input" value={form.siret} onChange={e => update("siret", e.target.value.replace(/[^0-9 ]/g, ""))} placeholder="ex. 123 456 789 00012" inputMode="numeric"/>
           </div>
 
           <div style={fieldStyle}>
             <div style={labelStyle}>Mon entreprise</div>
-            <input className="tp-input" value={form.companyName} onChange={e => update("companyName", e.target.value)} placeholder="CHIC CAR 84"/>
+            <input className="tp-input" value={form.companyName} onChange={e => update("companyName", e.target.value)} placeholder="ex. Auto-Entrepreneur Dupont"/>
           </div>
 
           <div style={fieldStyle}>
             <div style={labelStyle}>N° d'inscription VTC</div>
-            <input className="tp-input" value={form.evtcNumber} onChange={e => update("evtcNumber", e.target.value.toUpperCase())} placeholder="EVTC084220001"/>
+            <input className="tp-input" value={form.evtcNumber} onChange={e => update("evtcNumber", e.target.value.toUpperCase())} placeholder="ex. EVTC013579246"/>
           </div>
 
           <div style={fieldStyle}>
             <div style={labelStyle}>Carte professionnelle</div>
-            <input className="tp-input" value={form.proCardNumber} onChange={e => update("proCardNumber", e.target.value.toUpperCase())} placeholder="VTC-84-2024-0428"/>
+            <input className="tp-input" value={form.proCardNumber} onChange={e => update("proCardNumber", e.target.value.toUpperCase())} placeholder="ex. VTC-13-2024-0001"/>
           </div>
 
           <div style={{ display: "flex", gap: 10, ...fieldStyle }}>
             <div style={{ flex: 2 }}>
               <div style={labelStyle}>Modèle véhicule</div>
-              <input className="tp-input" value={form.vehicleModel} onChange={e => update("vehicleModel", e.target.value)} placeholder="Mercedes Classe E"/>
+              <input className="tp-input" value={form.vehicleModel} onChange={e => update("vehicleModel", e.target.value)} placeholder="ex. Peugeot 508"/>
             </div>
             <div style={{ flex: 1 }}>
               <div style={labelStyle}>Plaque</div>
-              <input className="tp-input" value={form.vehiclePlate} onChange={e => update("vehiclePlate", e.target.value.toUpperCase())} placeholder="GT-482-AV"/>
+              <input className="tp-input" value={form.vehiclePlate} onChange={e => update("vehiclePlate", e.target.value.toUpperCase())} placeholder="ex. AB-123-CD"/>
             </div>
           </div>
 
@@ -3620,7 +3620,7 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
           <div style={{ position: "relative" }}>
             <Building2 size={16} style={{ position: "absolute", left: 14, top: 14, color: "var(--muted)" }}/>
             <input className="tp-input" style={{ paddingLeft: 38, fontFamily: "monospace" }}
-              placeholder="832 456 789 00012" value={form.siret} onChange={e => update("siret", e.target.value)}/>
+              placeholder="ex. 123 456 789 00012" value={form.siret} onChange={e => update("siret", e.target.value)}/>
           </div>
           <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4, lineHeight: 1.5 }}>
             Votre activité VTC est vérifiée automatiquement via le registre INSEE (gratuit).
