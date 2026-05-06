@@ -140,6 +140,92 @@ export async function signOut() {
   }
 }
 
+/**
+ * Sign in with Apple — Apple OAuth via Supabase Auth.
+ *
+ * Conforme :
+ *   - App Store règle 4.8 (obligatoire si email login présent, depuis 2020)
+ *   - RGPD (Apple expose seulement email + nom — pas de tracking)
+ *
+ * Côté serveur, Supabase Dashboard doit avoir :
+ *   - Authentication → Providers → Apple : Enabled
+ *   - Service ID + Team ID + Key ID + Private Key (.p8) renseignés
+ *   - Redirect URL : https://olmhckwethdcxhvsrfie.supabase.co/auth/v1/callback
+ *
+ * Côté Apple Developer Console :
+ *   - "Sign in with Apple" capability activée pour le bundle id com.trajetpro.app
+ *   - Service ID `com.trajetpro.app.signin` créé
+ *   - Authentication Key (.p8) téléchargée
+ *
+ * Mode WEB : Supabase ouvre une popup vers appleid.apple.com → l'utilisateur
+ * autorise → redirect vers /auth/v1/callback → session créée.
+ *
+ * Mode iOS NATIF : sur device, on devrait idéalement utiliser le plugin
+ * @capacitor-community/apple-sign-in pour une UX native (pas de popup web).
+ * Pour l'instant on utilise le flow OAuth web qui marche dans la WebView.
+ */
+export async function signInWithApple() {
+  const redirectTo = typeof window !== 'undefined'
+    ? `${window.location.origin}/`
+    : undefined;
+
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'apple',
+    options: {
+      redirectTo,
+      // Demande email + nom (les seules données qu'Apple expose).
+      // L'utilisateur verra "Apple va partager : email, prénom et nom".
+      scopes: 'email name',
+    },
+  });
+
+  if (error) {
+    throw new Error(`Sign in with Apple échoué : ${error.message}`);
+  }
+  return data;
+}
+
+/**
+ * Supprime DÉFINITIVEMENT le compte de l'utilisateur connecté.
+ *
+ * Conforme :
+ *   - RGPD article 17 (droit à l'effacement)
+ *   - App Store règle 5.1.1(v) (suppression in-app obligatoire)
+ *   - Google Play Data Safety
+ *
+ * Effet :
+ *   - Toutes les factures, bons, transactions et device fingerprints
+ *     sont supprimés en base.
+ *   - Le compte auth.users est supprimé (la session est invalidée).
+ *   - Le localStorage est purgé.
+ *
+ * IRRÉVERSIBLE — le caller DOIT confirmer 2x avant d'appeler.
+ *
+ * @returns {Promise<{ success: true, deleted_invoices, deleted_bookings, deleted_transactions }>}
+ * @throws si l'appel RPC échoue (l'utilisateur reste connecté).
+ */
+export async function deleteMyAccount() {
+  const { data, error } = await supabase.rpc('delete_my_account');
+  if (error) {
+    throw new Error(`Suppression du compte échouée : ${error.message}`);
+  }
+
+  // Purge le localStorage côté client (la session est déjà invalidée
+  // côté serveur par la suppression de auth.users)
+  if (typeof localStorage !== 'undefined') {
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith('sb-') || k.toLowerCase().includes('supabase'))) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+  }
+
+  return data;
+}
+
 // ----------------------------------------------------------------------------
 // Vérifications anti-fraude
 // ----------------------------------------------------------------------------

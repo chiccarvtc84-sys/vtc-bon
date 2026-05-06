@@ -249,8 +249,19 @@ th {
   background: var(--tp-bg-elevated);
 }
 
-/* Placeholders à remplir (fond rouge subtil pour ne pas qu'on les rate) */
+/* Spans qui contenaient des placeholders [XXX].
+   Une fois remplies par les vraies infos, on garde une légère mise en
+   valeur (gras + couleur or) sans le rouge agressif. Les placeholders
+   non remplis (vides ou contenant encore des crochets) restent en rouge
+   via la classe `tp-todo-empty` qu'on applique manuellement si besoin. */
 .tp-todo {
+  font-weight: 600;
+  color: var(--tp-text);
+}
+
+/* Variante explicite pour signaler un champ encore à remplir.
+   À utiliser uniquement si on veut volontairement attirer l'attention. */
+.tp-todo-empty {
   display: inline-block;
   background: rgba(239, 68, 68, 0.18);
   color: #fca5a5;

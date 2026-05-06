@@ -37,6 +37,8 @@ import {
   findPurchaseBySessionId,
   verifySiret as sbVerifySiret,
   isDisposableEmail as sbIsDisposableEmail,
+  deleteMyAccount as sbDeleteMyAccount,
+  signInWithApple as sbSignInWithApple,
 } from './lib/supabase.js';
 import { watchNetwork, isNativePlatform, preferencesGet, preferencesSet } from './lib/platform.js';
 import { checkPasswordStrength, isPasswordPwned } from './lib/passwordSecurity.js';
@@ -50,6 +52,7 @@ import {
 } from './lib/biometric.js';
 import { buildInvoicePdf, downloadInvoicePdf } from './lib/invoicePdf.js';
 import { shareGeneric, sharePdf, openMailto, openSms, downloadIcs } from './lib/shareHelpers.js';
+import { exportInvoicesCsv, exportBookingsCsv } from './lib/csvExport.js';
 import { parseVoiceCommand as parseVoiceCommandV2 } from './lib/voiceParser.js';
 import {
   ensureNotificationPermission,
@@ -596,6 +599,21 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
   const todayBookings = bookings.filter(b => new Date(b.dateTime).toDateString() === today.toDateString());
   const weekRevenue = invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.amount, 0);
 
+  // ─── Stats du mois en cours (utiles pour déclaration URSSAF / TVA) ────
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  const monthBookings = bookings.filter((b) => {
+    const dt = new Date(b.dateTime);
+    return dt >= monthStart && dt < monthEnd;
+  });
+  const monthInvoices = invoices.filter((i) => {
+    const dt = new Date(i.date);
+    return dt >= monthStart && dt < monthEnd;
+  });
+  const monthRevenueTTC = monthInvoices.reduce((s, i) => s + (i.amount || 0), 0);
+  const monthVAT = monthInvoices.reduce((s, i) => s + (i.vatAmount || 0), 0);
+  const monthLabel = today.toLocaleDateString('fr-FR', { month: 'long' });
+
   return (
     <div className="tp-scroll tp-fade-in">
       <div style={{ padding: "28px 20px 8px" }}>
@@ -629,6 +647,41 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
           </div>
           <div className="tp-serif" style={{ fontSize: 28, fontWeight: 600, marginTop: 4, color: "var(--accent)" }}>{eur(weekRevenue)}</div>
           <div style={{ fontSize: 12, color: "var(--text-dim)" }}>cette semaine</div>
+        </div>
+      </div>
+
+      {/* ─── Stats du mois — vue rapide pour déclaration URSSAF/TVA ─── */}
+      <div style={{ padding: "16px 20px 0" }}>
+        <div className="tp-label" style={{ marginBottom: 8, padding: "0 2px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>📊 Ce mois — {monthLabel}</span>
+          <button onClick={() => onGoTab("invoices")} style={{
+            fontSize: 10, color: "var(--accent)", background: "none", border: "none",
+            cursor: "pointer", fontWeight: 600, padding: 0,
+          }}>Voir factures →</button>
+        </div>
+        <div className="tp-card" style={{ padding: 14, background: "var(--surface)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 9, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Courses</div>
+              <div className="tp-serif" style={{ fontSize: 22, fontWeight: 600, marginTop: 2 }}>{monthBookings.length}</div>
+            </div>
+            <div style={{ borderLeft: "1px solid var(--border)", paddingLeft: 10 }}>
+              <div style={{ fontSize: 9, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>CA TTC</div>
+              <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600, marginTop: 2, color: "var(--accent)" }}>{eur(monthRevenueTTC)}</div>
+            </div>
+            <div style={{ borderLeft: "1px solid var(--border)", paddingLeft: 10 }}>
+              <div style={{ fontSize: 9, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>TVA 10%</div>
+              <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600, marginTop: 2, color: "var(--text-dim)" }}>{eur(monthVAT)}</div>
+            </div>
+          </div>
+          {monthInvoices.length > 0 && (
+            <button onClick={() => {
+              const result = exportInvoicesCsv(invoices, bookings, today);
+              alert(`✅ Export CSV téléchargé : ${result.count} facture(s).\n\nÀ envoyer à votre comptable.`);
+            }} className="tp-btn tp-btn-ghost" style={{ width: "100%", marginTop: 12, fontSize: 12, justifyContent: "center" }}>
+              <Download size={13}/> Exporter ce mois en CSV
+            </button>
+          )}
         </div>
       </div>
 
@@ -1253,7 +1306,7 @@ function FieldRow({ icon: Icon, label, value, detected, uncertain }) {
 /* -------------------------------------------------------------------------
    BOOKING FORM
    ------------------------------------------------------------------------- */
-function BookingForm({ initial, onCancel, onSave }) {
+function BookingForm({ initial, bookings = [], onCancel, onSave }) {
   const [form, setForm] = useState({
     customerName: "", phone: "", pickupAddress: "", dropoffAddress: "",
     dateTime: new Date().toISOString().slice(0,16),
@@ -1263,6 +1316,43 @@ function BookingForm({ initial, onCancel, onSave }) {
   });
   const [pickupSuggestOpen, setPickupSuggestOpen] = useState(false);
   const [dropoffSuggestOpen, setDropoffSuggestOpen] = useState(false);
+  const [clientPickerOpen, setClientPickerOpen] = useState(false);
+
+  // ─── Liste de clients récurrents auto-construite depuis les bookings
+  // précédents (groupé par customerName, trié par fréquence puis date la
+  // plus récente). Évite à l'utilisateur de re-saisir les coordonnées
+  // d'un client habituel à chaque nouvelle course.
+  const recurrentClients = useMemo(() => {
+    const map = new Map();
+    for (const b of bookings) {
+      if (!b.customerName) continue;
+      const key = b.customerName.trim().toLowerCase();
+      if (!key) continue;
+      const existing = map.get(key);
+      if (existing) {
+        existing.count += 1;
+        if (new Date(b.createdAt || b.dateTime) > new Date(existing.lastSeen)) {
+          existing.lastSeen = b.createdAt || b.dateTime;
+          // Mettre à jour avec les infos les plus récentes
+          if (b.phone) existing.phone = b.phone;
+          if (b.pickupAddress) existing.lastPickup = b.pickupAddress;
+          if (b.dropoffAddress) existing.lastDropoff = b.dropoffAddress;
+        }
+      } else {
+        map.set(key, {
+          name: b.customerName,
+          phone: b.phone || '',
+          lastPickup: b.pickupAddress || '',
+          lastDropoff: b.dropoffAddress || '',
+          count: 1,
+          lastSeen: b.createdAt || b.dateTime || new Date().toISOString(),
+        });
+      }
+    }
+    return Array.from(map.values())
+      .sort((a, b) => (b.count - a.count) || (new Date(b.lastSeen) - new Date(a.lastSeen)))
+      .slice(0, 8); // top 8 clients les plus fréquents/récents
+  }, [bookings]);
 
   const estimatedPrice = useMemo(() => estimatePrice(form.distance, form.duration), [form.distance, form.duration]);
 
@@ -1300,7 +1390,69 @@ function BookingForm({ initial, onCancel, onSave }) {
         </div>
 
         <div>
-          <div className="tp-label" style={{ marginBottom: 6 }}>Client</div>
+          <div className="tp-label" style={{ marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>Client</span>
+            {recurrentClients.length > 0 && (
+              <button type="button"
+                onClick={() => setClientPickerOpen(v => !v)}
+                style={{
+                  fontSize: 10, color: "var(--accent)", background: "none", border: "none",
+                  cursor: "pointer", fontWeight: 600, padding: 0, display: "flex",
+                  alignItems: "center", gap: 4,
+                }}>
+                <UserPlus size={11}/> {clientPickerOpen ? "Fermer" : `Mes clients (${recurrentClients.length})`}
+              </button>
+            )}
+          </div>
+
+          {/* Picker de clients récurrents — pré-remplit nom + tel + adresses
+              à partir des bookings précédents. Un clic = gain de 30 secondes
+              de saisie pour un client habituel. */}
+          {clientPickerOpen && recurrentClients.length > 0 && (
+            <div className="tp-card tp-fade-in" style={{
+              marginBottom: 10, padding: 8, background: "var(--surface)",
+              maxHeight: 220, overflowY: "auto",
+            }}>
+              {recurrentClients.map((c) => (
+                <button key={c.name} type="button"
+                  onClick={() => {
+                    setForm(f => ({
+                      ...f,
+                      customerName: c.name,
+                      phone: c.phone || f.phone,
+                      pickupAddress: c.lastPickup || f.pickupAddress,
+                      dropoffAddress: c.lastDropoff || f.dropoffAddress,
+                    }));
+                    setClientPickerOpen(false);
+                  }}
+                  style={{
+                    width: "100%", padding: "10px 12px", display: "flex",
+                    alignItems: "center", gap: 10, textAlign: "left",
+                    background: "transparent", border: "none", cursor: "pointer",
+                    borderBottom: "1px solid var(--border)",
+                  }}>
+                  <div style={{
+                    width: 32, height: 32, borderRadius: 8, background: "var(--accent-soft)",
+                    color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center",
+                    fontWeight: 700, fontSize: 13, flexShrink: 0,
+                  }}>
+                    {c.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{c.name}</div>
+                    <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 1 }}>
+                      {c.count} course{c.count > 1 ? 's' : ''} · {c.phone || 'sans tél.'}
+                    </div>
+                  </div>
+                  <ChevronRight size={14} style={{ color: "var(--text-dim)", flexShrink: 0 }}/>
+                </button>
+              ))}
+              <div style={{ fontSize: 9, color: "var(--text-dim)", padding: "6px 12px 0", lineHeight: 1.4 }}>
+                Clients construits automatiquement à partir de vos courses précédentes. Un clic remplit nom, téléphone et adresses habituelles.
+              </div>
+            </div>
+          )}
+
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <input className="tp-input" placeholder="Nom et prénom" value={form.customerName} onChange={e => update("customerName", e.target.value)}/>
             <input className="tp-input" placeholder="Téléphone (facultatif)" value={form.phone} onChange={e => update("phone", e.target.value)}/>
@@ -1455,7 +1607,7 @@ function BookingForm({ initial, onCancel, onSave }) {
 /* -------------------------------------------------------------------------
    BOOKING DETAIL
    ------------------------------------------------------------------------- */
-function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice }) {
+function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplicate }) {
   if (!booking) return null;
 
   // ─── Handlers branchés sur les helpers Capacitor / Web Share / mailto ──
@@ -1554,9 +1706,10 @@ function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice }) {
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <button className="tp-btn tp-btn-ghost" onClick={() => onInvoice(booking)}><Receipt size={15}/> Facturer</button>
+          <button onClick={() => onDuplicate && onDuplicate(booking)} className="tp-btn tp-btn-ghost"><Copy size={15}/> Dupliquer</button>
           <button onClick={onShareBooking} className="tp-btn tp-btn-ghost"><Share2 size={15}/> Partager</button>
           <button onClick={onEmailClient} className="tp-btn tp-btn-ghost"><Send size={15}/> Email client</button>
-          <button onClick={onAgenda} className="tp-btn tp-btn-ghost"><Calendar size={15}/> Agenda</button>
+          <button onClick={onAgenda} className="tp-btn tp-btn-ghost" style={{ gridColumn: "1 / span 2" }}><Calendar size={15}/> Ajouter à l'agenda (.ics)</button>
         </div>
 
         <button onClick={() => onDelete(booking)} className="tp-btn" style={{ color: "var(--error)", background: "var(--error-soft)", border: "1px solid rgba(248,113,113,0.25)" }}>
@@ -1664,6 +1817,20 @@ function InvoicesScreen({ invoices, bookings, tokenBalance, onOpenInvoice, onGoT
           <Search size={15} style={{ position: "absolute", left: 14, top: 13, color: "var(--muted)" }}/>
           <input className="tp-input" style={{ paddingLeft: 38 }} placeholder="Rechercher N° ou client..." value={search} onChange={e => setSearch(e.target.value)}/>
         </div>
+      </div>
+
+      {/* Export comptable mensuel — utile pour le comptable du chauffeur */}
+      <div style={{ padding: "14px 20px 0" }}>
+        <button onClick={() => {
+          const result = exportInvoicesCsv(invoices, bookings, new Date());
+          if (result.count === 0) {
+            alert("Aucune facture sur le mois en cours.");
+          } else {
+            alert(`✅ Export CSV téléchargé : ${result.count} facture(s), ${eur(result.totalTTC)} TTC.\n\nFichier prêt à être envoyé à votre comptable.`);
+          }
+        }} className="tp-btn tp-btn-ghost" style={{ width: "100%", justifyContent: "center", fontSize: 13 }}>
+          <Download size={15}/> Exporter le mois en CSV (pour comptable)
+        </button>
       </div>
 
       <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
@@ -3078,6 +3245,34 @@ function LoginScreen({ onChangeMode, onLogin }) {
           {loading ? <><Loader2 size={16} style={{ animation: "tp-spin 1s linear infinite" }}/> Connexion...</> : <><LogIn size={16}/> Se connecter</>}
         </button>
 
+        {/* ─── Séparateur "ou" + Sign in with Apple ─────────────────────
+            Apple App Store règle 4.8 oblige à proposer Sign in with Apple
+            si on offre déjà email/password. Style proche du bouton Apple
+            officiel (noir, logo Apple, "Continuer avec Apple"). */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "8px 0" }}>
+          <div style={{ flex: 1, height: 1, background: "var(--border)" }}/>
+          <span style={{ fontSize: 11, color: "var(--text-dim)", fontWeight: 500 }}>OU</span>
+          <div style={{ flex: 1, height: 1, background: "var(--border)" }}/>
+        </div>
+
+        <button onClick={async () => {
+          try {
+            await sbSignInWithApple();
+            // Redirect géré par Supabase OAuth flow — pas de code après ce point.
+          } catch (err) {
+            setError("Sign in with Apple échoué : " + (err?.message || err));
+          }
+        }} className="tp-btn" style={{
+          padding: "14px", fontSize: 15, background: "#000", color: "#fff",
+          border: "1px solid #000", display: "flex", alignItems: "center",
+          justifyContent: "center", gap: 8,
+        }}>
+          <svg width="16" height="16" viewBox="0 0 384 512" fill="currentColor">
+            <path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/>
+          </svg>
+          Continuer avec Apple
+        </button>
+
         <div style={{ textAlign: "center", fontSize: 12, color: "var(--text-dim)", marginTop: 12 }}>
           Pas encore de compte ?{" "}
           <button onClick={() => onChangeMode("signup")} style={{ color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 700, padding: 0 }}>
@@ -3616,7 +3811,7 @@ function ReferralScreen({ user, onBack }) {
 /* -------------------------------------------------------------------------
    SETTINGS SCREEN — Préférences
    ------------------------------------------------------------------------- */
-function SettingsScreen({ onBack, preferences, onChangePref }) {
+function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount }) {
   const groups = [
     {
       title: "Affichage", items: [
@@ -3756,10 +3951,16 @@ function SettingsScreen({ onBack, preferences, onChangePref }) {
           </div>
         </div>
 
-        <div style={{ padding: "0 4px" }}>
-          <button style={{ fontSize: 12, color: "var(--error)", background: "none", border: "none", cursor: "pointer", fontWeight: 600, padding: 6 }}>
-            Effacer toutes mes données locales
+        <div style={{ padding: "0 4px", marginTop: 4 }}>
+          <button onClick={onDeleteAccount} style={{
+            fontSize: 12, color: "var(--error)", background: "none", border: "none",
+            cursor: "pointer", fontWeight: 600, padding: 6, textDecoration: "underline",
+          }}>
+            🗑️ Supprimer définitivement mon compte
           </button>
+          <div style={{ fontSize: 10, color: "var(--text-dim)", padding: "4px 6px 0", lineHeight: 1.5 }}>
+            Action irréversible · supprime tous vos bons, factures et crédits · conformément au RGPD (article 17)
+          </div>
         </div>
       </div>
     </div>
@@ -4796,6 +4997,49 @@ export default function App() {
     setPurchaseOpen(true);
   };
 
+  // ─── Suppression de compte (RGPD + App Store règle 5.1.1(v)) ─────────
+  // 2 confirmations consécutives car action irréversible.
+  const handleDeleteAccount = async () => {
+    if (isGuest) {
+      alert("Vous êtes en mode invité — il n'y a pas de compte à supprimer. Pour effacer vos données locales, désinstallez l'app.");
+      return;
+    }
+
+    const confirm1 = window.confirm(
+      "⚠️ ATTENTION — Action irréversible\n\n" +
+      "Vous êtes sur le point de supprimer DÉFINITIVEMENT votre compte TrajetPro.\n\n" +
+      "Tous vos bons de course, factures et crédits seront effacés.\n" +
+      "Vous ne pourrez PAS récupérer ces données ensuite.\n\n" +
+      "Continuer ?"
+    );
+    if (!confirm1) return;
+
+    const typed = window.prompt(
+      "Pour confirmer, tapez exactement le mot SUPPRIMER (en majuscules) :"
+    );
+    if (typed !== "SUPPRIMER") {
+      alert("Suppression annulée — vous n'avez pas tapé SUPPRIMER.");
+      return;
+    }
+
+    try {
+      const result = await sbDeleteMyAccount();
+      alert(
+        `✅ Compte supprimé.\n\n` +
+        `${result.deleted_invoices || 0} facture(s), ${result.deleted_bookings || 0} bon(s), ` +
+        `${result.deleted_transactions || 0} transaction(s) effacés.\n\n` +
+        `Au revoir.`
+      );
+      // Force le retour à l'écran de bienvenue. On ne peut pas appeler
+      // signOut() classique vu que la session est déjà invalidée côté
+      // serveur — on triggère juste le reload qui repassera par le flow
+      // de boot et trouvera "pas de session" → écran Welcome.
+      window.location.reload();
+    } catch (err) {
+      alert("Erreur lors de la suppression : " + (err?.message || err));
+    }
+  };
+
   const onChangePref = async (key, value) => {
     // Cas spécial : la biométrie nécessite un vrai prompt système Face ID
     // / Touch ID via le plugin Capacitor. On bypass le mapping normal pour
@@ -4888,6 +5132,20 @@ export default function App() {
       booking={detailBooking}
       onBack={() => setDetailBooking(null)}
       onEdit={(b) => { setDetailBooking(null); setFormInitial(b); setFormOpen(true); }}
+      onDuplicate={(b) => {
+        // Pré-remplir avec les infos du bon, mais SANS l'id (= nouveau bon)
+        // ni la date (= force l'utilisateur à mettre la nouvelle date).
+        // Tout le reste — client, adresses, prix, distance — est conservé.
+        setDetailBooking(null);
+        setFormInitial({
+          ...b,
+          id: undefined,
+          createdAt: undefined,
+          status: 'pending',
+          dateTime: new Date().toISOString().slice(0, 16),
+        });
+        setFormOpen(true);
+      }}
       onDelete={onDeleteBooking}
       onInvoice={onInvoiceBooking}
     />;
@@ -4897,6 +5155,7 @@ export default function App() {
   } else if (formOpen) {
     screen = <BookingForm
       initial={formInitial}
+      bookings={bookings}
       onCancel={() => { setFormOpen(false); setFormInitial(null); }}
       onSave={onSaveBooking}
     />;
@@ -4929,7 +5188,7 @@ export default function App() {
         screen = <ReferralScreen user={currentUser} onBack={() => setTab("profile")}/>;
         break;
       case "settings":
-        screen = <SettingsScreen onBack={() => setTab("profile")} preferences={preferences} onChangePref={onChangePref}/>;
+        screen = <SettingsScreen onBack={() => setTab("profile")} preferences={preferences} onChangePref={onChangePref} onDeleteAccount={handleDeleteAccount}/>;
         break;
       case "terms":
         screen = <TermsScreen onBack={() => setTab("profile")}/>;
