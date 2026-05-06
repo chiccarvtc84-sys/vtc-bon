@@ -3791,25 +3791,9 @@ function HelpScreen({ onBack }) {
           </button>
         </div>
 
-        {/* Guide */}
-        <button className="tp-card" style={{
-          width: "100%", padding: 16, display: "flex", alignItems: "center", gap: 12,
-          background: "linear-gradient(135deg, rgba(244,185,66,0.1), rgba(244,185,66,0.02))",
-          borderColor: "var(--accent-ring)", cursor: "pointer", textAlign: "left",
-        }}>
-          <div style={{
-            width: 42, height: 42, borderRadius: 11,
-            background: "var(--accent)", color: "#0B0B0D",
-            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-          }}>
-            <BookOpen size={20}/>
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>Guide d'utilisation</div>
-            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>Tutoriels vidéo et pas-à-pas</div>
-          </div>
-          <ArrowUpRight size={16} style={{ color: "var(--accent)" }}/>
-        </button>
+        {/* Le bloc "Guide d'utilisation / Tutoriels vidéo" a été retiré
+            (demande utilisateur, 2026-05-06). On garde la FAQ ci-dessous
+            qui couvre les questions fréquentes sans nécessiter de vidéos. */}
 
         {/* FAQ */}
         <div>

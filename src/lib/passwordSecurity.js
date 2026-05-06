@@ -25,9 +25,14 @@
 // ============================================================================
 
 /**
- * Évalue rapidement la force d'un mot de passe (avant l'appel HIBP).
- * Renvoie { ok, score (0-4), reason } — ne bloque pas les mots de passe
- * simples mais valides ; bloque uniquement les patterns évidents.
+ * Évalue la validité d'un mot de passe — règles MINIMALES (choix utilisateur) :
+ *   - au moins 8 caractères
+ *   - au moins 1 lettre
+ *   - au moins 1 chiffre
+ *
+ * Pas de blacklist, pas de check de mots-clés contextuels, pas de pattern
+ * de complexité. Le bcrypt côté Supabase + la vérif email + l'anti-fraude
+ * device assurent la sécurité réelle du compte.
  */
 export function checkPasswordStrength(password) {
   if (!password || typeof password !== 'string') {
@@ -37,49 +42,17 @@ export function checkPasswordStrength(password) {
     return { ok: false, score: 0, reason: 'Mot de passe : 8 caractères minimum' };
   }
   if (password.length > 200) {
-    // Limite de Supabase Auth = 72 caractères pour bcrypt, mais on autorise
-    // jusqu'à 200 pour les passphrases longues. Au-delà, c'est suspect.
+    // Limite bcrypt = 72 chars, on autorise jusqu'à 200 pour les passphrases.
     return { ok: false, score: 0, reason: 'Mot de passe trop long (max 200 caractères)' };
   }
-
-  const lower = password.toLowerCase();
-
-  // Blacklist locale des mots de passe les plus utilisés (top 30 FR/EN)
-  const obviousList = new Set([
-    'password', 'motdepasse', 'azerty', 'azerty123', 'qwerty', 'qwerty123',
-    '12345678', '123456789', '1234567890', 'azertyuiop', 'qwertyuiop',
-    '00000000', '11111111', 'abcdefgh', 'iloveyou', 'admin123', 'letmein',
-    'welcome1', 'monkey123', 'dragon123', 'football', 'baseball',
-    'sunshine', 'master12', 'trustno1', 'soleil12', 'bonjour1', 'bonsoir1',
-    'password1', 'password123',
-  ]);
-  if (obviousList.has(lower)) {
-    return { ok: false, score: 1, reason: 'Mot de passe trop courant. Choisissez-en un plus original.' };
+  if (!/[a-zA-Z]/.test(password)) {
+    return { ok: false, score: 0, reason: 'Mot de passe : au moins une lettre' };
+  }
+  if (!/\d/.test(password)) {
+    return { ok: false, score: 0, reason: 'Mot de passe : au moins un chiffre' };
   }
 
-  // Blacklist contextuelle TrajetPro
-  const appWords = ['trajetpro', 'trajet', 'chauffeur', 'vtc', 'taxi', 'sorgues', 'avignon'];
-  for (const w of appWords) {
-    if (lower === w || lower === w + '123' || lower === w + '2024' || lower === w + '2025' || lower === w + '2026') {
-      return { ok: false, score: 1, reason: 'Évitez les mots de passe basés sur le nom de l\'app ou votre ville.' };
-    }
-  }
-
-  // Score de diversité : longueur + nb de classes de caractères
-  let score = 0;
-  if (password.length >= 8) score++;
-  if (password.length >= 12) score++;
-  let classes = 0;
-  if (/[a-z]/.test(password)) classes++;
-  if (/[A-Z]/.test(password)) classes++;
-  if (/\d/.test(password)) classes++;
-  if (/[^A-Za-z0-9]/.test(password)) classes++;
-  if (classes >= 2) score++;
-  if (classes >= 3) score++;
-
-  // On autorise tout dès lors que ce n'est pas dans la blacklist —
-  // le check final HIBP est la vraie garde-fou.
-  return { ok: true, score, reason: null };
+  return { ok: true, score: 3, reason: null };
 }
 
 /**
