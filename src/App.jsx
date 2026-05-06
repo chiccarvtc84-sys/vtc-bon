@@ -3819,19 +3819,10 @@ function HelpScreen({ onBack }) {
           </div>
         </div>
 
-        {/* Emergency contact */}
-        <div className="tp-card" style={{ padding: 14, background: "var(--surface)", display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: 9, background: "var(--success-soft)",
-            color: "var(--success)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-          }}>
-            <Phone size={16}/>
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 700 }}>Support urgent</div>
-            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>+33 4 90 00 00 00 · 24h/24 pour pannes critiques</div>
-          </div>
-        </div>
+        {/* Bloc "Support urgent" (numéro de téléphone fictif) retiré
+            le 2026-05-06 — non requis pour la v1.0 et donnait l'illusion
+            d'un support 24/24 qu'on ne peut pas tenir.
+            Le contact reste : contact@trajetpro.fr. */}
 
         <div style={{ textAlign: "center", fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
           TrajetPro v1.0.0 · Build 2026.04.23
