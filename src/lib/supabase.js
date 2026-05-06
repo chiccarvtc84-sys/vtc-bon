@@ -605,8 +605,12 @@ export async function updateUserProfile(userId, updates) {
   if (!userId) throw new Error('userId manquant');
   // Whitelist : on n'autorise que les champs éditables côté UI.
   // Évite qu'un attaquant envoie token_balance=99999 par ex.
+  // Note : `siret` était initialement bloqué (vérif INSEE au signup),
+  // mais on l'autorise depuis 2026-05-06 sur demande utilisateur pour
+  // permettre les corrections de saisie. La validation côté UI vérifie
+  // juste que c'est 14 chiffres.
   const allowed = [
-    'name', 'phone', 'company_name', 'evtc_number',
+    'name', 'phone', 'siret', 'company_name', 'evtc_number',
     'pro_card_number', 'vehicle_model', 'vehicle_plate',
     'iban', 'vat_intra',
   ];

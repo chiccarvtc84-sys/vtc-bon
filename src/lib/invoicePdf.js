@@ -103,15 +103,6 @@ export async function buildInvoicePdf(invoice, booking, profile, settings = {}) 
   const margin = PAGE.margin;
   const colMid = pageW / 2;
 
-  // Toggles ON par défaut, mais on n'affiche que si la valeur sous-jacente
-  // existe (évite les lignes vides type "Forme juridique : ").
-  const showSiret = settings.show_siret !== false && Boolean(siret);
-  const showVtcNumber = settings.show_vtc_number !== false && Boolean(vtcNumber);
-  const showLegalForm = settings.show_legal_form !== false && Boolean(settings.legal_form);
-  const showVatNumber = settings.show_vat_number !== false && Boolean(settings.vat_number);
-  const showVehiclePlate = settings.show_vehicle_plate !== false && Boolean(vehiclePlate);
-  const logoDataUrl = settings.logo_data_url || null;
-
   // ─── Hiérarchie des sources de données pour la facture ──────────────
   // 1. settings.* (saisies par l'utilisateur dans Préférences → Facturation)
   // 2. profile.* (currentUser depuis Supabase, ex. email + name + phone)
@@ -119,6 +110,8 @@ export async function buildInvoicePdf(invoice, booking, profile, settings = {}) 
   //    affichée sur le PDF (chaque if test la valeur).
   // On NE retombe PAS sur les valeurs démo de DRIVER_PROFILE qui ne
   // correspondent pas au vrai chauffeur (TrajetPro Services / Moi Conducteur).
+  // ⚠️ Ces consts DOIVENT être déclarées AVANT les `showXxx` ci-dessous,
+  // sinon TDZ error "Cannot access 'siret' before initialization".
   const companyName = settings.company_name || profile.companyName || profile.name || '';
   const address = settings.address || profile.address || '';
   const email = settings.email || profile.email || '';
@@ -128,6 +121,15 @@ export async function buildInvoicePdf(invoice, booking, profile, settings = {}) 
   const proCardNumber = settings.pro_card_number || profile.proCardNumber || '';
   const vehicleModel = settings.vehicle_model || profile.vehicleModel || '';
   const vehiclePlate = settings.vehicle_plate || profile.vehiclePlate || '';
+
+  // Toggles ON par défaut, mais on n'affiche que si la valeur sous-jacente
+  // existe (évite les lignes vides type "Forme juridique : ").
+  const showSiret = settings.show_siret !== false && Boolean(siret);
+  const showVtcNumber = settings.show_vtc_number !== false && Boolean(vtcNumber);
+  const showLegalForm = settings.show_legal_form !== false && Boolean(settings.legal_form);
+  const showVatNumber = settings.show_vat_number !== false && Boolean(settings.vat_number);
+  const showVehiclePlate = settings.show_vehicle_plate !== false && Boolean(vehiclePlate);
+  const logoDataUrl = settings.logo_data_url || null;
 
   // ─── Bandeau supérieur : numéro + date à droite, logo si présent ────
   let topY = margin;

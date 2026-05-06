@@ -2672,7 +2672,7 @@ function InsufficientModal({ open, onClose, onBuy, action, currentBalance }) {
 // passe par un flow auth séparé).
 function EditProfileModal({ open, currentUser, onClose, onSave }) {
   const [form, setForm] = useState({
-    name: "", phone: "", companyName: "", evtcNumber: "",
+    name: "", phone: "", siret: "", companyName: "", evtcNumber: "",
     proCardNumber: "", vehicleModel: "", vehiclePlate: "",
     iban: "", vatIntra: "",
   });
@@ -2685,6 +2685,7 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
       setForm({
         name: currentUser.name || "",
         phone: currentUser.phone || "",
+        siret: currentUser.siret || "",
         companyName: currentUser.companyName || "",
         evtcNumber: currentUser.evtcNumber || "",
         proCardNumber: currentUser.proCardNumber || "",
@@ -2707,11 +2708,21 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
       setError("Numéro de téléphone français invalide (ex : +33 6 12 34 56 78)");
       return;
     }
+    // SIRET : 14 chiffres, espaces autorisés à la saisie. On vérifie
+    // la longueur après nettoyage. Champ optionnel à la modification
+    // (un user qui le laisse vide garde l'ancien — la sanitization
+    // côté supabase.js convertit '' en null).
+    const cleanSiret = form.siret.replace(/\s/g, '');
+    if (cleanSiret && !/^\d{14}$/.test(cleanSiret)) {
+      setError("SIRET invalide : doit contenir exactement 14 chiffres.");
+      return;
+    }
     setLoading(true);
     try {
       await onSave({
         name: form.name.trim(),
         phone: form.phone.trim() || null,
+        siret: cleanSiret || null,
         company_name: form.companyName.trim() || null,
         evtc_number: form.evtcNumber.trim().toUpperCase() || null,
         pro_card_number: form.proCardNumber.trim().toUpperCase() || null,
@@ -2758,8 +2769,13 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
           </div>
 
           <div style={fieldStyle}>
+            <div style={labelStyle}>SIRET (14 chiffres)</div>
+            <input className="tp-input" value={form.siret} onChange={e => update("siret", e.target.value.replace(/[^0-9 ]/g, ""))} placeholder="91851179100033" inputMode="numeric"/>
+          </div>
+
+          <div style={fieldStyle}>
             <div style={labelStyle}>Mon entreprise</div>
-            <input className="tp-input" value={form.companyName} onChange={e => update("companyName", e.target.value)} placeholder="TrajetPro Services"/>
+            <input className="tp-input" value={form.companyName} onChange={e => update("companyName", e.target.value)} placeholder="CHIC CAR 84"/>
           </div>
 
           <div style={fieldStyle}>
@@ -2796,7 +2812,7 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
           <div className="tp-card" style={{ padding: 12, marginBottom: 16, background: "var(--surface)", borderColor: "rgba(255,255,255,0.06)" }}>
             <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
               <Info size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 6, color: "var(--accent)" }}/>
-              Le <b>SIRET</b> et l'<b>email</b> ne sont pas modifiables ici — contactez le support pour les changer (vérification INSEE / email obligatoire).
+              L'<b>email</b> n'est pas modifiable ici — contactez le support pour le changer (vérification email obligatoire).
             </div>
           </div>
 
