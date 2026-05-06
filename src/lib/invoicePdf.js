@@ -105,6 +105,11 @@ export async function buildInvoicePdf(invoice, booking, profile, settings = {}) 
 
   const showSiret = settings.show_siret !== false;
   const showVtcNumber = settings.show_vtc_number !== false;
+  // Nouveaux champs avec valeur + toggle. Si l'input est vide, on n'affiche
+  // pas la ligne, même si le toggle est ON (évite "Forme juridique : ").
+  const showLegalForm = settings.show_legal_form !== false && Boolean(settings.legal_form);
+  const showVatNumber = settings.show_vat_number !== false && Boolean(settings.vat_number);
+  const showVehiclePlate = settings.show_vehicle_plate !== false && Boolean(settings.vehicle_plate || profile.vehiclePlate);
   const logoDataUrl = settings.logo_data_url || null;
 
   // Override possibles depuis settings, sinon profile
@@ -194,14 +199,31 @@ export async function buildInvoicePdf(invoice, booking, profile, settings = {}) 
     pdf.text(phone, col1X, leftY);
     leftY += 4;
   }
+  // Forme juridique (toggleable, depuis settings)
+  if (showLegalForm) {
+    pdf.text(`Forme juridique : ${settings.legal_form}`, col1X, leftY);
+    leftY += 4;
+  }
   // SIRET (toggleable)
   if (showSiret && profile.siret) {
     pdf.text(`SIRET : ${profile.siret}`, col1X, leftY);
     leftY += 4;
   }
+  // N° TVA intracommunautaire (toggleable, depuis settings)
+  if (showVatNumber) {
+    pdf.text(`N° TVA intracom. : ${settings.vat_number}`, col1X, leftY);
+    leftY += 4;
+  }
   // N° VTC (toggleable)
   if (showVtcNumber && profile.vtcNumber) {
     pdf.text(`N° VTC : ${profile.vtcNumber}`, col1X, leftY);
+    leftY += 4;
+  }
+  // Immatriculation véhicule (toggleable). On préfère la valeur saisie
+  // dans settings, sinon on retombe sur profile.vehiclePlate (DRIVER_PROFILE).
+  if (showVehiclePlate) {
+    const plate = settings.vehicle_plate || profile.vehiclePlate;
+    pdf.text(`Immatriculation : ${plate}`, col1X, leftY);
     leftY += 4;
   }
   // Carte pro (toujours, c'est une obligation décret 2017-483)

@@ -3991,8 +3991,8 @@ function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount, in
             </div>
           </div>
 
-          {/* Toggles SIRET et VTC */}
-          <div className="tp-card" style={{ background: "var(--surface)", overflow: "hidden" }}>
+          {/* Toggles simples (valeur lue depuis le profil user) */}
+          <div className="tp-card" style={{ background: "var(--surface)", overflow: "hidden", marginBottom: 8 }}>
             {[
               { id: 'show_siret', label: 'Afficher mon SIRET sur les factures', value: invoiceSettings?.show_siret !== false },
               { id: 'show_vtc_number', label: 'Afficher mon n° VTC sur les factures', value: invoiceSettings?.show_vtc_number !== false },
@@ -4020,6 +4020,51 @@ function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount, in
               </div>
             ))}
           </div>
+
+          {/* Champs avec valeur saisie + toggle d'affichage.
+              Si l'input est vide → la ligne ne s'affiche pas sur le PDF
+              même si le toggle est ON. C'est volontaire pour éviter une
+              ligne "Forme juridique : " avec rien après. */}
+          {[
+            { id: 'legal_form', label: 'Forme juridique', placeholder: 'EI, SASU, EURL, SARL…', toggleId: 'show_legal_form' },
+            { id: 'vat_number', label: 'N° TVA intracommunautaire', placeholder: 'FR12345678901', toggleId: 'show_vat_number' },
+            { id: 'vehicle_plate', label: 'Immatriculation du véhicule', placeholder: 'AB-123-CD', toggleId: 'show_vehicle_plate' },
+          ].map((field) => {
+            const value = invoiceSettings?.[field.id] || '';
+            const visible = invoiceSettings?.[field.toggleId] !== false;
+            return (
+              <div key={field.id} className="tp-card" style={{ padding: 14, background: "var(--surface)", marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{field.label}</div>
+                    <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>
+                      {value
+                        ? (visible ? "Affiché sur les factures" : "Masqué sur les factures")
+                        : "Saisissez une valeur ci-dessous"}
+                    </div>
+                  </div>
+                  <button onClick={() => onUpdateInvoiceSettings({ [field.toggleId]: !visible })}
+                    title={visible ? "Masquer sur les factures" : "Afficher sur les factures"}
+                    style={{
+                      width: 40, height: 22, borderRadius: 999,
+                      background: visible ? "var(--accent)" : "var(--surface-3)",
+                      position: "relative", transition: "background 0.15s",
+                      border: "none", cursor: "pointer", flexShrink: 0,
+                    }}>
+                    <div style={{
+                      position: "absolute", top: 2, left: visible ? 20 : 2,
+                      width: 18, height: 18, borderRadius: "50%", background: "#fff",
+                      transition: "left 0.15s",
+                    }}/>
+                  </button>
+                </div>
+                <input className="tp-input"
+                  placeholder={field.placeholder}
+                  value={value}
+                  onChange={(e) => onUpdateInvoiceSettings({ [field.id]: e.target.value })}/>
+              </div>
+            );
+          })}
         </div>
 
         {/* Sélecteur multi-checkbox des rappels avant course.
