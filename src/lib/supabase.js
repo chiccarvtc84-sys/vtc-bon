@@ -184,15 +184,73 @@ export async function loadInvoiceSettings(userId) {
  * Met à jour les paramètres de facturation. Merge avec l'existant
  * pour préserver les autres champs.
  *
+ * Sécurité H-4 (audit 2026-05-06) : whitelist stricte des clés
+ * autorisées + plafonds sur les valeurs (longueur, taille du logo).
+ * Évite que (a) la mise à jour échappe à un attaquant déterminé
+ * pour bourrer la JSONB de blob (DOS row-bloat), (b) introduire des
+ * clés inattendues qui seraient lues plus tard par le générateur PDF.
+ *
  * @param {string} userId
  * @param {object} updates — partial settings à fusionner
  */
+const ALLOWED_INVOICE_SETTINGS_KEYS = [
+  'logo_data_url',
+  'show_siret', 'show_vtc_number',
+  'legal_form', 'show_legal_form',
+  'vat_number', 'show_vat_number',
+  'vehicle_plate', 'show_vehicle_plate',
+  'vtc_number', 'pro_card_number', 'vehicle_model',
+  // Champs étendus du profil (legacy : la nouvelle UI ne les expose plus,
+  // mais on les autorise pour compat ascendante).
+  'company_name', 'address',
+];
+
+const LIMITS = {
+  logo_data_url: 200_000,        // ~150 KB de base64 pour PNG/JPG ≤300px
+  legal_form: 100,
+  vat_number: 50,
+  vehicle_plate: 20,
+  vtc_number: 50,
+  pro_card_number: 50,
+  vehicle_model: 100,
+  company_name: 200,
+  address: 500,
+};
+
 export async function updateInvoiceSettings(userId, updates) {
   if (!userId) throw new Error('userId requis');
-  // Lit l'existant pour merger côté client (pas d'opération JSONB serveur
-  // pour éviter une RPC dédiée)
+  if (!updates || typeof updates !== 'object') {
+    throw new Error('updates doit être un objet');
+  }
+
+  // Whitelist stricte : on ne garde que les clés autorisées
+  const sanitized = {};
+  for (const k of ALLOWED_INVOICE_SETTINGS_KEYS) {
+    if (k in updates) {
+      let v = updates[k];
+      // Coerce les booleans
+      if (k.startsWith('show_')) {
+        sanitized[k] = Boolean(v);
+        continue;
+      }
+      // String fields : trim + check max length
+      if (typeof v === 'string') {
+        v = v.trim();
+        const limit = LIMITS[k];
+        if (limit && v.length > limit) {
+          throw new Error(`${k} trop long (max ${limit} caractères)`);
+        }
+      } else if (v !== null && v !== undefined) {
+        // Si c'est ni string ni null/undefined ni boolean → reject
+        throw new Error(`${k} : type invalide`);
+      }
+      sanitized[k] = v;
+    }
+  }
+
+  // Lit l'existant pour merger côté client
   const current = await loadInvoiceSettings(userId);
-  const merged = { ...current, ...updates };
+  const merged = { ...current, ...sanitized };
   const { error } = await supabase
     .from('users')
     .update({ invoice_settings: merged })
@@ -568,28 +626,17 @@ export async function findPurchaseBySessionId(userId, sessionId) {
   return data;
 }
 
-/**
- * MODE DEV : achat de tokens sans Stripe.
- * Crée une transaction de type 'purchase' qui crédite le solde via le trigger.
- * Conservé pour le mode invité ou pour les tests sans paiement réel.
- */
-export async function purchaseTokensDev(userId, { packageId, tokens, priceTTC }) {
-  // ID factice pour respecter la contrainte unique stripe_payment_intent_id en dev
-  const fakeIntentId = `dev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-  const { data, error } = await supabase.rpc('credit_token_purchase', {
-    p_user_id: userId,
-    p_tokens: tokens,
-    p_amount_ttc: priceTTC,
-    p_package_id: packageId,
-    p_stripe_intent_id: fakeIntentId,
-  });
-
-  if (error) throw error;
-  if (data !== true) throw new Error('Achat refusé (transaction déjà enregistrée)');
-
-  return { ok: true, intentId: fakeIntentId };
-}
+// Sécurité M-5 (audit 2026-05-06) : `purchaseTokensDev` retiré du bundle
+// production. Ce helper appelait `credit_token_purchase` directement depuis
+// le client, ce qui (a) exposait la signature de la RPC dans le bundle
+// minifié, (b) servait de roadmap pour un attaquant sur les noms de
+// paramètres à essayer. La RPC est de toute façon REVOKE'd côté serveur
+// pour `anon` et `authenticated` — donc le helper était déjà sans effet,
+// mais on le supprime pour ne pas polluer le bundle.
+//
+// L'achat de tokens en production passe EXCLUSIVEMENT par :
+//   client → createCheckoutSession() → Stripe Checkout → webhook signé →
+//   credit_token_purchase (côté serveur, en service_role).
 
 /**
  * Met à jour le profil utilisateur (champs métier éditables).

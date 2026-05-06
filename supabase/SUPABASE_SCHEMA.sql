@@ -2,12 +2,41 @@
 -- TRAJETPRO - SCHEMA COMPLET SUPABASE
 -- ============================================================================
 -- Version : 1.0.0
--- Date : 2026-04-27
--- Auteur : Conducteur (initial) + Claude (assistance)
+-- Date initiale : 2026-04-27
+-- Dernière revue sécu : 2026-05-06 (audit pre-AppStore)
 --
--- Ce script crée TOUT le schéma de la base depuis zéro.
--- Si tu pars d'une base vide : exécute tout d'un coup.
--- Si tu as déjà des tables : les commandes DROP en début vont les nettoyer.
+-- ⛔️ AVERTISSEMENT CRITIQUE (audit sécurité 2026-05-06) ⛔️
+-- ============================================================================
+-- Ce fichier représente le SCHEMA INITIAL de la v0.1, conservé pour
+-- documentation. Il ne doit JAMAIS être ré-appliqué tel quel sur la prod.
+--
+-- La base de production a depuis reçu de nombreuses migrations critiques
+-- (durcissement RPC, RLS WITH CHECK + guard trigger, anti-double-bonus,
+-- colonnes manquantes invoices, etc.) qui NE sont PAS reflétées ici.
+-- Ré-appliquer ce fichier ramènerait des vulnérabilités critiques :
+--   - C-1 : auto-crédit illimité de tokens (consume_tokens sans auth.uid)
+--   - C-2 : sabotage tokens d'un autre user (credit_token_purchase ouvert)
+--   - C-3 : référral fraud (credit_referral_bonus sans vérif)
+--   - C-4 : modification directe de token_balance / flagged via RLS
+--
+-- Pour la base de référence à jour, voir l'historique des migrations
+-- appliquées via Supabase MCP ou Dashboard → Database → Migrations.
+-- Migrations critiques de sécurité appliquées en prod :
+--   - security_hardening_rpc_and_rls
+--   - security_revoke_trigger_functions_from_anon
+--   - anti_double_welcome_bonus_per_device
+--   - security_users_protected_columns_guard (2026-05-06)
+--   - invoices_add_missing_compliance_columns (2026-05-06)
+--   - bookings_customer_extended_fields
+--   - users_invoice_settings_jsonb
+--   - delete_my_account_rpc
+--   - monthly_bonus_skip_first_month
+--   - invoice_number_unique_per_user
+--
+-- Pour reconstruire un environnement staging : utiliser le snapshot prod
+-- de Supabase (Database → Backups), pas ce fichier. ⛔️
+-- ============================================================================
+-- Ce script crée le schéma de base v0.1 depuis zéro.
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------

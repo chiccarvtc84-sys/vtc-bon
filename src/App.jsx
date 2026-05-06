@@ -28,7 +28,8 @@ import {
   updateBooking as sbUpdateBooking,
   deleteBooking as sbDeleteBooking,
   createInvoice as sbCreateInvoice,
-  purchaseTokensDev,
+  // purchaseTokensDev retiré (audit 2026-05-06, M-5 : code mort + roadmap d'attaque)
+
   findUserByReferralCode,
   creditReferralBonus,
   updateUserProfile,

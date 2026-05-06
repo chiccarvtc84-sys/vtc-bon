@@ -180,19 +180,27 @@ Deno.serve(async (req: Request) => {
 
     return json({ sessionId: session.id, url: session.url }, 200);
   } catch (err) {
-    // ⚠️ DEBUG : on retourne le détail Stripe au client pour diagnostiquer
-    // (à retirer / restreindre en prod stricte). Le message Stripe est
-    // généralement déjà destiné à être lisible par l'utilisateur final.
+    // Sécurité H-2 (audit 2026-05-06) : ne JAMAIS forwarder les détails
+    // Stripe au client (stripe_code/type/status, message brut). Ça leak
+    // des infos de configuration interne (priceId manquant, clé pas en
+    // bon mode, account pas activé, etc.) qui aident un attaquant à
+    // cartographier ton infra. On log côté serveur, on renvoie générique.
     const e = err as { message?: string; code?: string; type?: string; statusCode?: number };
-    console.error("create-checkout-session error:", err);
+    console.error("[create-checkout-session] error:", {
+      msg: e?.message, code: e?.code, type: e?.type, status: e?.statusCode,
+    });
+
+    // Whitelist d'erreurs Stripe traduisibles directement au user.
+    // Tout le reste retourne un message générique (pas de détail technique).
+    let userMessage = "Erreur interne lors de la création du paiement";
+    if (e?.code === "card_declined") userMessage = "Carte refusée par votre banque.";
+    else if (e?.code === "rate_limit") userMessage = "Trop de tentatives, réessayez dans une minute.";
+    else if (e?.type === "StripeInvalidRequestError" && /amount/.test(e?.message || "")) {
+      userMessage = "Montant invalide.";
+    }
+
     return new Response(
-      JSON.stringify({
-        error: "Erreur interne lors de la création du paiement",
-        detail: e?.message || String(err),
-        stripe_code: e?.code,
-        stripe_type: e?.type,
-        stripe_status: e?.statusCode,
-      }),
+      JSON.stringify({ error: userMessage }),
       { status: 500, headers: { ...cors, "Content-Type": "application/json" } },
     );
   }

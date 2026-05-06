@@ -274,11 +274,14 @@ Deno.serve(async (req: Request) => {
 
       if (!fetchResponse.ok) {
         const errBody = await fetchResponse.text();
+        // Sécurité H-3 (audit 2026-05-06) : on log le détail Gemini côté
+        // serveur mais on NE le forward PAS au client. Sinon on leak des
+        // infos de config (API_KEY_INVALID, PERMISSION_DENIED, quota, …)
+        // qui permettent à un attaquant authentifié de probe l'état de la
+        // clé Gemini.
         console.error("[voice-extract] Gemini API error:", fetchResponse.status, errBody.slice(0, 500));
         return json({
-          error: "Erreur API Gemini",
-          detail: `${fetchResponse.status} ${fetchResponse.statusText}`,
-          gemini_body: errBody.slice(0, 500),
+          error: "Service d'extraction vocale temporairement indisponible. Réessayez dans quelques instants.",
         }, 502);
       }
 
@@ -289,18 +292,19 @@ Deno.serve(async (req: Request) => {
 
     // 6. Vérification que Gemini a bien renvoyé du contenu (pas bloqué pour
     //    safety, par exemple).
+    // Sécurité : on log le blockReason / finishReason côté serveur mais
+    // on ne les forward pas au client.
     if (geminiResponse?.promptFeedback?.blockReason) {
       console.error("[voice-extract] Gemini prompt blocked:", geminiResponse.promptFeedback.blockReason);
       return json({
-        error: "Requête bloquée par Gemini (safety filter)",
-        detail: geminiResponse.promptFeedback.blockReason,
+        error: "Votre transcription contient du contenu sensible et a été refusée. Reformulez en termes plus neutres.",
       }, 400);
     }
 
     const candidates = geminiResponse?.candidates;
     if (!Array.isArray(candidates) || candidates.length === 0) {
       console.error("[voice-extract] Gemini sans candidats:", geminiResponse);
-      return json({ error: "Réponse Gemini sans candidat" }, 500);
+      return json({ error: "Service d'extraction vocale temporairement indisponible." }, 500);
     }
 
     const firstCandidate = candidates[0];
@@ -309,8 +313,7 @@ Deno.serve(async (req: Request) => {
       const finishReason = firstCandidate?.finishReason;
       console.error("[voice-extract] Gemini réponse vide. finishReason:", finishReason);
       return json({
-        error: "Réponse Gemini sans contenu texte",
-        detail: `finishReason: ${finishReason || "inconnu"}`,
+        error: "Réponse vide. Réessayez en parlant plus clairement.",
       }, 500);
     }
 
@@ -320,11 +323,12 @@ Deno.serve(async (req: Request) => {
     try {
       parsed = safeParseJson(text);
     } catch (parseErr) {
-      console.error("[voice-extract] JSON parse failed:", text.slice(0, 500));
+      // On log le détail (parser error + raw text) côté serveur mais on
+      // NE le forward PAS au client. La réponse brute Gemini peut contenir
+      // des infos d'API ou des tokens accidentellement échappés.
+      console.error("[voice-extract] JSON parse failed:", String(parseErr), text.slice(0, 500));
       return json({
-        error: "Réponse Gemini invalide (JSON malformé)",
-        detail: String(parseErr),
-        raw: text.slice(0, 500),
+        error: "Réponse de l'IA inattendue. Réessayez ou utilisez la saisie manuelle.",
       }, 500);
     }
 
