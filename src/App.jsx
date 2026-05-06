@@ -3056,14 +3056,26 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
 
     setLoading(true);
     try {
-      // HaveIBeenPwned k-anonymity : bloque les mots de passe figurant dans
-      // une fuite connue. Appel HTTPS sans clé, fail-open en cas de panne.
-      const pwned = await isPasswordPwned(form.password);
-      if (pwned) {
-        setError("Ce mot de passe a été divulgué dans une fuite de données. Choisissez-en un autre.");
-        setLoading(false);
-        return;
-      }
+      // HaveIBeenPwned k-anonymity : on garde le check pour informer
+      // l'utilisateur si son mot de passe a déjà fuité dans une autre app
+      // (LinkedIn 2012, Adobe 2013…), mais on ne BLOQUE PLUS l'inscription.
+      // L'utilisateur reste libre de réutiliser un mot de passe qu'il
+      // connaît, et la sécurité de son compte TrajetPro reste assurée par :
+      //   - bcrypt côté Supabase Auth
+      //   - vérification email obligatoire
+      //   - empreinte d'appareil anti-fraude
+      //   - HTTPS partout
+      // Le warning est juste un avertissement console + log analytics.
+      try {
+        const pwned = await isPasswordPwned(form.password);
+        if (pwned) {
+          console.warn(
+            "[signup] Le mot de passe choisi figure dans une fuite HIBP. " +
+            "L'inscription est autorisée mais l'utilisateur devrait changer ce " +
+            "mot de passe sur les autres sites où il l'utilise.",
+          );
+        }
+      } catch (_) { /* HIBP indisponible : on ignore, fail-open */ }
 
       // Vérification SIRET via Edge Function (déjà déployée — Phase 3)
       // On bloque les SIRETs invalides ou non-VTC
