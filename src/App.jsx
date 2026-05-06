@@ -48,6 +48,8 @@ import {
   verifyBiometric,
   getBiometryLabel,
 } from './lib/biometric.js';
+import { buildInvoicePdf, downloadInvoicePdf } from './lib/invoicePdf.js';
+import { shareGeneric, sharePdf, openMailto, openSms, downloadIcs } from './lib/shareHelpers.js';
 import { parseVoiceCommand as parseVoiceCommandV2 } from './lib/voiceParser.js';
 import {
   ensureNotificationPermission,
@@ -1455,6 +1457,44 @@ function BookingForm({ initial, onCancel, onSave }) {
    ------------------------------------------------------------------------- */
 function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice }) {
   if (!booking) return null;
+
+  // ─── Handlers branchés sur les helpers Capacitor / Web Share / mailto ──
+  const summary = booking
+    ? `Bon de course TrajetPro\n\nClient : ${booking.customerName}\n${formatDateTime(booking.dateTime)}\nDe : ${booking.pickupAddress}\nÀ : ${booking.dropoffAddress}\nDistance : ${booking.distance} km · ${booking.duration} min\nPrix TTC : ${eur(booking.price)}\n\nChauffeur : ${DRIVER_PROFILE.firstName || ''} ${DRIVER_PROFILE.lastName || ''}\nSIRET ${DRIVER_PROFILE.siret} · VTC ${DRIVER_PROFILE.vtcNumber}\n${DRIVER_PROFILE.email || ''}`
+    : '';
+
+  const onShareBooking = async () => {
+    await shareGeneric({
+      title: `Course pour ${booking.customerName}`,
+      text: summary,
+      dialogTitle: 'Partager le bon de course',
+    });
+  };
+
+  const onEmailClient = () => {
+    openMailto({
+      subject: `Confirmation de votre course du ${formatDate(booking.dateTime)}`,
+      body: `Bonjour ${booking.customerName},\n\nJe vous confirme votre course :\n\n${summary}\n\nÀ très bientôt,\n${DRIVER_PROFILE.firstName || ''} ${DRIVER_PROFILE.lastName || ''}`,
+    });
+  };
+
+  const onAgenda = () => {
+    if (!booking.dateTime) {
+      alert("Cette course n'a pas de date — impossible de l'ajouter au calendrier.");
+      return;
+    }
+    const start = new Date(booking.dateTime);
+    const end = new Date(start.getTime() + (booking.duration || 60) * 60 * 1000);
+    downloadIcs({
+      title: `VTC : ${booking.customerName} (${booking.pickupAddress} → ${booking.dropoffAddress})`,
+      start,
+      end,
+      location: booking.pickupAddress,
+      description: summary,
+      uid: `trajetpro-${booking.id}@trajetpro.fr`,
+    });
+  };
+
   return (
     <div className="tp-scroll tp-fade-in">
       <TopBar title="Bon de course" subtitle={`Réf. ${booking.id.toUpperCase()}`} onBack={onBack}
@@ -1514,9 +1554,9 @@ function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice }) {
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <button className="tp-btn tp-btn-ghost" onClick={() => onInvoice(booking)}><Receipt size={15}/> Facturer</button>
-          <button className="tp-btn tp-btn-ghost"><Share2 size={15}/> Partager</button>
-          <button className="tp-btn tp-btn-ghost"><Send size={15}/> Email client</button>
-          <button className="tp-btn tp-btn-ghost"><Calendar size={15}/> Agenda</button>
+          <button onClick={onShareBooking} className="tp-btn tp-btn-ghost"><Share2 size={15}/> Partager</button>
+          <button onClick={onEmailClient} className="tp-btn tp-btn-ghost"><Send size={15}/> Email client</button>
+          <button onClick={onAgenda} className="tp-btn tp-btn-ghost"><Calendar size={15}/> Agenda</button>
         </div>
 
         <button onClick={() => onDelete(booking)} className="tp-btn" style={{ color: "var(--error)", background: "var(--error-soft)", border: "1px solid rgba(248,113,113,0.25)" }}>
@@ -1655,10 +1695,59 @@ function InvoicesScreen({ invoices, bookings, tokenBalance, onOpenInvoice, onGoT
    ------------------------------------------------------------------------- */
 function InvoiceDetail({ invoice, booking, onBack }) {
   if (!invoice) return null;
+
+  // ─── Handlers branchés sur jsPDF + Capacitor Share + URL schemes ──────
+  // Ils marchent sur web (téléchargement direct + Web Share API si dispo)
+  // ET sur mobile (menu de partage natif iOS/Android avec PDF en pièce jointe).
+  const filename = `${invoice.number || 'facture'}.pdf`;
+  const summaryText = `Bonjour ${invoice.customerName || ''},\n\nVoici votre facture ${invoice.number} d'un montant de ${eur(invoice.amount)} pour la course du ${booking ? formatDateTime(booking.dateTime) : ''}.\n\nVous trouverez la facture en pièce jointe (ou disponible sur demande à contact@trajetpro.fr).\n\nMerci de votre confiance,\n${DRIVER_PROFILE.firstName || ''} ${DRIVER_PROFILE.lastName || ''}\nTrajetPro`;
+
+  const onDownload = async () => {
+    try {
+      await downloadInvoicePdf(invoice, booking, DRIVER_PROFILE);
+    } catch (e) {
+      alert("Erreur lors de la génération du PDF : " + (e?.message || e));
+    }
+  };
+
+  const onShareInvoice = async () => {
+    try {
+      const blob = await buildInvoicePdf(invoice, booking, DRIVER_PROFILE);
+      await sharePdf(blob, filename, {
+        title: `Facture ${invoice.number}`,
+        text: summaryText,
+      });
+    } catch (e) {
+      alert("Erreur lors du partage : " + (e?.message || e));
+    }
+  };
+
+  const onShareLink = async () => {
+    // Pas d'URL publique pour l'instant → on partage juste le résumé texte
+    await shareGeneric({
+      title: `Facture ${invoice.number}`,
+      text: summaryText,
+      dialogTitle: 'Partager les détails de la facture',
+    });
+  };
+
+  const onEmail = () => {
+    openMailto({
+      subject: `Facture ${invoice.number} — TrajetPro`,
+      body: summaryText,
+    });
+  };
+
+  const onSms = () => {
+    openSms({
+      body: `Bonjour, votre facture ${invoice.number} de ${eur(invoice.amount)} (course du ${booking ? formatDate(booking.dateTime) : ''}) — TrajetPro. Pour recevoir le PDF, répondez à ce message.`,
+    });
+  };
+
   return (
     <div className="tp-scroll tp-fade-in">
       <TopBar title={invoice.number} subtitle={`Émise le ${formatDate(invoice.date)}`} onBack={onBack}
-        rightAction={<button className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }}><Download size={16}/></button>}/>
+        rightAction={<button onClick={onDownload} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }} title="Télécharger le PDF"><Download size={16}/></button>}/>
 
       <div style={{ padding: "8px 20px 20px", display: "flex", flexDirection: "column", gap: 16 }}>
         <div className="tp-card-elevated" style={{ padding: 20 }}>
@@ -1714,10 +1803,10 @@ function InvoiceDetail({ invoice, booking, onBack }) {
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <button className="tp-btn tp-btn-primary"><Send size={15}/> Envoyer</button>
-          <button className="tp-btn tp-btn-ghost"><Share2 size={15}/> Lien partage</button>
-          <button className="tp-btn tp-btn-ghost"><Mail size={15}/> Email</button>
-          <button className="tp-btn tp-btn-ghost"><MessageSquare size={15}/> SMS</button>
+          <button onClick={onShareInvoice} className="tp-btn tp-btn-primary"><Send size={15}/> Envoyer (PDF)</button>
+          <button onClick={onShareLink} className="tp-btn tp-btn-ghost"><Share2 size={15}/> Partager texte</button>
+          <button onClick={onEmail} className="tp-btn tp-btn-ghost"><Mail size={15}/> Email</button>
+          <button onClick={onSms} className="tp-btn tp-btn-ghost"><MessageSquare size={15}/> SMS</button>
         </div>
       </div>
     </div>
