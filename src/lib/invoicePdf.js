@@ -103,20 +103,31 @@ export async function buildInvoicePdf(invoice, booking, profile, settings = {}) 
   const margin = PAGE.margin;
   const colMid = pageW / 2;
 
-  const showSiret = settings.show_siret !== false;
-  const showVtcNumber = settings.show_vtc_number !== false;
-  // Nouveaux champs avec valeur + toggle. Si l'input est vide, on n'affiche
-  // pas la ligne, même si le toggle est ON (évite "Forme juridique : ").
+  // Toggles ON par défaut, mais on n'affiche que si la valeur sous-jacente
+  // existe (évite les lignes vides type "Forme juridique : ").
+  const showSiret = settings.show_siret !== false && Boolean(siret);
+  const showVtcNumber = settings.show_vtc_number !== false && Boolean(vtcNumber);
   const showLegalForm = settings.show_legal_form !== false && Boolean(settings.legal_form);
   const showVatNumber = settings.show_vat_number !== false && Boolean(settings.vat_number);
-  const showVehiclePlate = settings.show_vehicle_plate !== false && Boolean(settings.vehicle_plate || profile.vehiclePlate);
+  const showVehiclePlate = settings.show_vehicle_plate !== false && Boolean(vehiclePlate);
   const logoDataUrl = settings.logo_data_url || null;
 
-  // Override possibles depuis settings, sinon profile
-  const companyName = settings.company_name || profile.companyName || `${profile.firstName || ''} ${profile.lastName || ''}`.trim();
-  const address = settings.address || profile.address || profile.baseCity || '';
+  // ─── Hiérarchie des sources de données pour la facture ──────────────
+  // 1. settings.* (saisies par l'utilisateur dans Préférences → Facturation)
+  // 2. profile.* (currentUser depuis Supabase, ex. email + name + phone)
+  // 3. fallback vide ('') si rien n'est renseigné — la ligne ne sera pas
+  //    affichée sur le PDF (chaque if test la valeur).
+  // On NE retombe PAS sur les valeurs démo de DRIVER_PROFILE qui ne
+  // correspondent pas au vrai chauffeur (TrajetPro Services / Moi Conducteur).
+  const companyName = settings.company_name || profile.companyName || profile.name || '';
+  const address = settings.address || profile.address || '';
   const email = settings.email || profile.email || '';
   const phone = settings.phone || profile.phone || '';
+  const siret = profile.siret || '';
+  const vtcNumber = settings.vtc_number || profile.vtcNumber || '';
+  const proCardNumber = settings.pro_card_number || profile.proCardNumber || '';
+  const vehicleModel = settings.vehicle_model || profile.vehicleModel || '';
+  const vehiclePlate = settings.vehicle_plate || profile.vehiclePlate || '';
 
   // ─── Bandeau supérieur : numéro + date à droite, logo si présent ────
   let topY = margin;
@@ -205,8 +216,8 @@ export async function buildInvoicePdf(invoice, booking, profile, settings = {}) 
     leftY += 4;
   }
   // SIRET (toggleable)
-  if (showSiret && profile.siret) {
-    pdf.text(`SIRET : ${profile.siret}`, col1X, leftY);
+  if (showSiret) {
+    pdf.text(`SIRET : ${siret}`, col1X, leftY);
     leftY += 4;
   }
   // N° TVA intracommunautaire (toggleable, depuis settings)
@@ -215,40 +226,82 @@ export async function buildInvoicePdf(invoice, booking, profile, settings = {}) 
     leftY += 4;
   }
   // N° VTC (toggleable)
-  if (showVtcNumber && profile.vtcNumber) {
-    pdf.text(`N° VTC : ${profile.vtcNumber}`, col1X, leftY);
+  if (showVtcNumber) {
+    pdf.text(`N° VTC : ${vtcNumber}`, col1X, leftY);
     leftY += 4;
   }
-  // Immatriculation véhicule (toggleable). On préfère la valeur saisie
-  // dans settings, sinon on retombe sur profile.vehiclePlate (DRIVER_PROFILE).
+  // Immatriculation véhicule (toggleable)
   if (showVehiclePlate) {
-    const plate = settings.vehicle_plate || profile.vehiclePlate;
-    pdf.text(`Immatriculation : ${plate}`, col1X, leftY);
+    pdf.text(`Immatriculation : ${vehiclePlate}`, col1X, leftY);
+    leftY += 4;
+  }
+  // Modèle du véhicule (sans toggle, affiché si renseigné)
+  if (vehicleModel) {
+    pdf.text(`Véhicule : ${vehicleModel}`, col1X, leftY);
     leftY += 4;
   }
   // Carte pro (toujours, c'est une obligation décret 2017-483)
-  if (profile.proCardNumber) {
-    pdf.text(`Carte pro. : ${profile.proCardNumber}`, col1X, leftY);
+  if (proCardNumber) {
+    pdf.text(`Carte pro. : ${proCardNumber}`, col1X, leftY);
     leftY += 4;
   }
 
-  // Facturé à (droite, en face)
+  // ─── Facturé à (colonne droite, en face de l'émetteur) ──────────────
+  // Logique :
+  //   - Si une société client est renseignée (booking.customerCompany) :
+  //     Société en titre + nom du contact (customerName) en sous-ligne
+  //   - Sinon : nom du contact en titre + "Particulier" en sous-ligne
+  //   - Puis : adresse, téléphone, email si renseignés (n'affiche jamais
+  //     une ligne avec un libellé vide).
   let rightColY = y;
   pdf.setFont('helvetica', 'bold');
   pdf.setFontSize(11);
   pdf.setTextColor(COLORS.text);
-  pdf.text(invoice.customerName || invoice.customer_name || 'Client', col2X, rightColY);
-  rightColY += 5;
 
-  pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(9);
-  pdf.setTextColor(COLORS.textMuted);
-  pdf.text('Particulier', col2X, rightColY);
-  rightColY += 4;
+  const customerCompany = booking?.customerCompany || invoice.customerCompany || '';
+  const customerName = invoice.customerName || invoice.customer_name || booking?.customerName || 'Client';
 
-  // Si on a un téléphone ou email client (booking.phone ou customer fields)
-  if (booking?.phone) {
-    pdf.text(`Tél. : ${booking.phone}`, col2X, rightColY);
+  if (customerCompany) {
+    // Mode société : société en gros, contact en dessous
+    pdf.text(customerCompany, col2X, rightColY);
+    rightColY += 5;
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(9);
+    pdf.setTextColor(COLORS.textMuted);
+    pdf.text(`Contact : ${customerName}`, col2X, rightColY);
+    rightColY += 4;
+  } else {
+    // Mode particulier : nom complet en gros
+    pdf.text(customerName, col2X, rightColY);
+    rightColY += 5;
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(9);
+    pdf.setTextColor(COLORS.textMuted);
+    pdf.text('Particulier', col2X, rightColY);
+    rightColY += 4;
+  }
+
+  // Adresse de facturation client (si renseignée, peut être multi-lignes)
+  const customerAddress = booking?.customerAddress || invoice.customerAddress || '';
+  if (customerAddress) {
+    const lines = String(customerAddress).split('\n').slice(0, 3);
+    for (const line of lines) {
+      pdf.text(line, col2X, rightColY);
+      rightColY += 4;
+    }
+  }
+
+  // Téléphone client
+  const customerPhone = booking?.phone || booking?.customer_phone || invoice.customerPhone || '';
+  if (customerPhone) {
+    pdf.text(`Tél. : ${customerPhone}`, col2X, rightColY);
+    rightColY += 4;
+  }
+
+  // Email client
+  const customerEmail = booking?.customerEmail || booking?.customer_email || invoice.customerEmail || '';
+  if (customerEmail) {
+    pdf.text(customerEmail, col2X, rightColY);
     rightColY += 4;
   }
 
@@ -298,18 +351,14 @@ export async function buildInvoicePdf(invoice, booking, profile, settings = {}) 
       y += 5;
     }
 
+    // Demande utilisateur : afficher uniquement le kilométrage
+    // (pas de durée ni nombre de passagers, qui ne sont pas pertinents
+    // pour la facture finale).
     pdf.setFont('helvetica', 'normal');
     const distKm = booking.distance || booking.distance_km;
-    const durMin = booking.duration || booking.duration_min;
-    const pax = booking.passengers;
-    const meta = [
-      distKm ? `${distKm} km` : null,
-      durMin ? `${durMin} min` : null,
-      pax ? `${pax} passager${pax > 1 ? 's' : ''}` : null,
-    ].filter(Boolean).join(' · ');
-    if (meta) {
+    if (distKm) {
       pdf.setTextColor(COLORS.textMuted);
-      pdf.text(meta, margin, y);
+      pdf.text(`Distance : ${distKm} km`, margin, y);
       y += 5;
     }
   } else {

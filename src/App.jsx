@@ -1456,8 +1456,14 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
           )}
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <input className="tp-input" placeholder="Nom et prénom" value={form.customerName} onChange={e => update("customerName", e.target.value)}/>
+            <input className="tp-input" placeholder="Nom et prénom (ex. Jean Dupont)" value={form.customerName} onChange={e => update("customerName", e.target.value)}/>
             <input className="tp-input" placeholder="Téléphone (facultatif)" value={form.phone} onChange={e => update("phone", e.target.value)}/>
+            <input className="tp-input" type="email" placeholder="Email client (facultatif)" value={form.customerEmail || ""} onChange={e => update("customerEmail", e.target.value)}/>
+            <input className="tp-input" placeholder="Adresse de facturation (facultatif)" value={form.customerAddress || ""} onChange={e => update("customerAddress", e.target.value)}/>
+            <input className="tp-input" placeholder="Société / entreprise (si facturation pro)" value={form.customerCompany || ""} onChange={e => update("customerCompany", e.target.value)}/>
+            <div style={{ fontSize: 10, color: "var(--text-dim)", padding: "0 2px", lineHeight: 1.4 }}>
+              💡 Si vous facturez une entreprise, renseignez le nom de société. Il apparaîtra en titre dans la section "Facturé à" du PDF, avec votre client comme contact.
+            </div>
           </div>
         </div>
 
@@ -1862,8 +1868,23 @@ function InvoicesScreen({ invoices, bookings, tokenBalance, onOpenInvoice, onGoT
 /* -------------------------------------------------------------------------
    INVOICE DETAIL
    ------------------------------------------------------------------------- */
-function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {} }) {
+function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, currentUser = null }) {
   if (!invoice) return null;
+
+  // Profil "en dur" pour le PDF : on prend les VRAIES données du compte
+  // utilisateur connecté (currentUser depuis Supabase) en priorité.
+  // Les valeurs hardcodées de DRIVER_PROFILE ne sont PLUS utilisées sur
+  // la facture — elles servaient juste de démo pour le mode invité.
+  const realProfile = currentUser ? {
+    name: currentUser.name || '',
+    email: currentUser.email || '',
+    phone: currentUser.phone || '',
+    siret: currentUser.siret || '',
+    vatRate: 10, // taux TVA fixe pour transport personnes
+    // Tous les autres champs (companyName, vtcNumber, proCardNumber,
+    // vehicleModel, vehiclePlate, address) viennent de invoiceSettings
+    // car ils ne sont pas stockés dans la table users.
+  } : DRIVER_PROFILE; // fallback démo pour mode invité uniquement
 
   // ─── Handlers branchés sur jsPDF + Capacitor Share + URL schemes ──────
   // Ils marchent sur web (téléchargement direct + Web Share API si dispo)
@@ -1880,7 +1901,7 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {} }) {
 
   const onDownload = async () => {
     try {
-      await downloadInvoicePdf(invoice, booking, DRIVER_PROFILE, invoiceSettings);
+      await downloadInvoicePdf(invoice, booking, realProfile, invoiceSettings);
     } catch (e) {
       alert("Erreur lors de la génération du PDF : " + (e?.message || e));
     }
@@ -1888,7 +1909,7 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {} }) {
 
   const onShareInvoice = async () => {
     try {
-      const blob = await buildInvoicePdf(invoice, booking, DRIVER_PROFILE, invoiceSettings);
+      const blob = await buildInvoicePdf(invoice, booking, realProfile, invoiceSettings);
       await sharePdf(blob, filename, {
         title: `Facture ${invoice.number}`,
         text: summaryText,
@@ -1918,7 +1939,7 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {} }) {
   // natif qui, lui, attache le PDF automatiquement → meilleure UX.
   const onEmail = async () => {
     try {
-      await downloadInvoicePdf(invoice, booking, DRIVER_PROFILE, invoiceSettings);
+      await downloadInvoicePdf(invoice, booking, realProfile, invoiceSettings);
     } catch (_e) { /* on continue même si le download échoue */ }
     openMailto({
       subject: `Facture ${invoice.number} — TrajetPro`,
@@ -3991,6 +4012,38 @@ function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount, in
             </div>
           </div>
 
+          {/* Champs sans toggle — toujours affichés sur le PDF s'ils sont
+              renseignés. Ce sont les infos d'identité de l'entreprise qui
+              n'ont aucune raison d'être masquées. Si l'input est vide, la
+              ligne disparaît automatiquement du PDF. */}
+          {[
+            { id: 'company_name', label: 'Nom commercial / société', placeholder: 'CHIC CAR 84' },
+            { id: 'address', label: 'Adresse complète', placeholder: '16 rue des filles, 84000 Avignon', multiline: true },
+            { id: 'vtc_number', label: 'N° d\'inscription VTC (EVTC)', placeholder: 'EVTCxxxxxxxxxx' },
+            { id: 'pro_card_number', label: 'N° de carte pro. conducteur', placeholder: 'VTC-XX-2024-XXXX' },
+            { id: 'vehicle_model', label: 'Modèle du véhicule', placeholder: 'Peugeot 508, Mercedes Classe E…' },
+          ].map((field) => {
+            const value = invoiceSettings?.[field.id] || '';
+            return (
+              <div key={field.id} className="tp-card" style={{ padding: 14, background: "var(--surface)", marginBottom: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
+                {field.multiline ? (
+                  <textarea className="tp-input"
+                    rows={2}
+                    placeholder={field.placeholder}
+                    value={value}
+                    style={{ resize: "vertical", minHeight: 56, fontFamily: "inherit" }}
+                    onChange={(e) => onUpdateInvoiceSettings({ [field.id]: e.target.value })}/>
+                ) : (
+                  <input className="tp-input"
+                    placeholder={field.placeholder}
+                    value={value}
+                    onChange={(e) => onUpdateInvoiceSettings({ [field.id]: e.target.value })}/>
+                )}
+              </div>
+            );
+          })}
+
           {/* Toggles simples (valeur lue depuis le profil user) */}
           <div className="tp-card" style={{ background: "var(--surface)", overflow: "hidden", marginBottom: 8 }}>
             {[
@@ -4425,7 +4478,9 @@ function bookingFromDb(row) {
     id: row.id,
     customerName: row.customer_name,
     phone: row.customer_phone || "",
-    email: row.customer_email || "",
+    customerEmail: row.customer_email || "",
+    customerAddress: row.customer_address || "",
+    customerCompany: row.customer_company || "",
     pickupAddress: row.pickup_address,
     dropoffAddress: row.dropoff_address,
     dateTime: row.pickup_datetime ? row.pickup_datetime.slice(0, 16) : "",
@@ -5365,7 +5420,7 @@ export default function App() {
     />;
   } else if (detailInvoice) {
     const relatedBooking = bookings.find(b => b.id === detailInvoice.bookingId);
-    screen = <InvoiceDetail invoice={detailInvoice} booking={relatedBooking} onBack={() => setDetailInvoice(null)} invoiceSettings={invoiceSettings}/>;
+    screen = <InvoiceDetail invoice={detailInvoice} booking={relatedBooking} onBack={() => setDetailInvoice(null)} invoiceSettings={invoiceSettings} currentUser={currentUser}/>;
   } else if (formOpen) {
     screen = <BookingForm
       initial={formInitial}
