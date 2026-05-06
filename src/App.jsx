@@ -1867,7 +1867,14 @@ function InvoiceDetail({ invoice, booking, onBack }) {
   // Ils marchent sur web (téléchargement direct + Web Share API si dispo)
   // ET sur mobile (menu de partage natif iOS/Android avec PDF en pièce jointe).
   const filename = `${invoice.number || 'facture'}.pdf`;
-  const summaryText = `Bonjour ${invoice.customerName || ''},\n\nVoici votre facture ${invoice.number} d'un montant de ${eur(invoice.amount)} pour la course du ${booking ? formatDateTime(booking.dateTime) : ''}.\n\nVous trouverez la facture en pièce jointe (ou disponible sur demande à contact@trajetpro.fr).\n\nMerci de votre confiance,\n${DRIVER_PROFILE.firstName || ''} ${DRIVER_PROFILE.lastName || ''}\nTrajetPro`;
+
+  // Date de la prestation : on prend en priorité le booking lié, sinon
+  // la date d'émission de la facture comme fallback (jamais vide).
+  const prestationDate = booking?.dateTime
+    ? formatDate(booking.dateTime)
+    : (invoice.date ? formatDate(invoice.date) : 'date non renseignée');
+
+  const summaryText = `Bonjour ${invoice.customerName || ''},\n\nVoici votre facture ${invoice.number} d'un montant de ${eur(invoice.amount)} pour la course du ${prestationDate}.\n\nLe PDF de la facture vous est envoyé en pièce jointe (ou disponible sur demande à contact@trajetpro.fr).\n\nMerci de votre confiance,\n${DRIVER_PROFILE.firstName || ''} ${DRIVER_PROFILE.lastName || ''}\nTrajetPro`;
 
   const onDownload = async () => {
     try {
@@ -1898,16 +1905,28 @@ function InvoiceDetail({ invoice, booking, onBack }) {
     });
   };
 
-  const onEmail = () => {
+  // Le protocole `mailto:` NE PEUT PAS attacher de fichier — c'est une
+  // limitation native du navigateur, pas un bug. Pour contourner, on
+  // télécharge le PDF d'abord (il atterrit dans Téléchargements/Downloads),
+  // puis on ouvre le client mail avec un texte qui invite l'utilisateur
+  // à attacher manuellement. C'est en 2 clics au lieu d'1, mais c'est
+  // robuste sur web et évite la frustration d'un email "vide".
+  //
+  // Sur mobile, le bouton "Envoyer (PDF)" passe par le menu de partage
+  // natif qui, lui, attache le PDF automatiquement → meilleure UX.
+  const onEmail = async () => {
+    try {
+      await downloadInvoicePdf(invoice, booking, DRIVER_PROFILE);
+    } catch (_e) { /* on continue même si le download échoue */ }
     openMailto({
       subject: `Facture ${invoice.number} — TrajetPro`,
-      body: summaryText,
+      body: summaryText + `\n\n──────────\n📎 Le PDF "${filename}" a été téléchargé sur votre appareil. Joignez-le manuellement à cet email avant l'envoi (icône trombone dans votre client mail).`,
     });
   };
 
   const onSms = () => {
     openSms({
-      body: `Bonjour, votre facture ${invoice.number} de ${eur(invoice.amount)} (course du ${booking ? formatDate(booking.dateTime) : ''}) — TrajetPro. Pour recevoir le PDF, répondez à ce message.`,
+      body: `Bonjour, votre facture ${invoice.number} de ${eur(invoice.amount)} (course du ${prestationDate}) — TrajetPro. Pour recevoir le PDF, répondez à ce message.`,
     });
   };
 
