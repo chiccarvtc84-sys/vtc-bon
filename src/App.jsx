@@ -40,6 +40,14 @@ import {
 } from './lib/supabase.js';
 import { watchNetwork, isNativePlatform, preferencesGet, preferencesSet } from './lib/platform.js';
 import { checkPasswordStrength, isPasswordPwned } from './lib/passwordSecurity.js';
+import {
+  isBiometricAvailable,
+  isBiometricEnabled,
+  enableBiometric,
+  disableBiometric,
+  verifyBiometric,
+  getBiometryLabel,
+} from './lib/biometric.js';
 import { parseVoiceCommand as parseVoiceCommandV2 } from './lib/voiceParser.js';
 import {
   ensureNotificationPermission,
@@ -2512,7 +2520,7 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
   );
 }
 
-function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, onPromptSignup, onEditProfile }) {
+function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, onPromptSignup, onEditProfile, biometricEnabled = false }) {
   const lowTokens = tokenBalance <= 3;
   const displayName = currentUser?.name || `${DRIVER_PROFILE.firstName} ${DRIVER_PROFILE.lastName}`;
   const displayEmail = currentUser?.email || DRIVER_PROFILE.email;
@@ -2730,7 +2738,14 @@ function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, 
         <div className="tp-card" style={{ background: "var(--surface)" }}>
           {[
             { icon: Settings, label: "Préférences", onClick: () => onGoTab("settings") },
-            { icon: Fingerprint, label: "Identification biométrique", right: <span className="tp-chip tp-chip-success">Activée</span> },
+            {
+              icon: Fingerprint,
+              label: "Identification biométrique",
+              onClick: () => onGoTab("settings"),
+              right: biometricEnabled
+                ? <span className="tp-chip tp-chip-success">Activée</span>
+                : <span className="tp-chip" style={{ background: "var(--surface-3)", color: "var(--text-dim)", fontSize: 10 }}>Désactivée</span>,
+            },
             { icon: FileText, label: "Conditions générales", onClick: () => onGoTab("terms") },
             { icon: HelpCircle, label: "Aide et support", onClick: () => onGoTab("help") },
             { icon: LogOut, label: isGuest ? "Créer un compte" : "Déconnexion", danger: !isGuest, accent: isGuest, onClick: onLogout },
@@ -3765,30 +3780,24 @@ function HelpScreen({ onBack }) {
       <TopBar title="Aide et support" subtitle="Nous sommes là pour vous" onBack={onBack}/>
 
       <div style={{ padding: "0 20px 20px", display: "flex", flexDirection: "column", gap: 16 }}>
-        {/* Contact cards */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <a href="mailto:contact@trajetpro.fr" className="tp-card" style={{
-            padding: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
+        {/* Contact card — pleine largeur depuis le retrait du Chat en direct
+            (2026-05-06). On laisse uniquement le contact email, qui ouvre le
+            client mail natif iOS / Android via mailto. */}
+        <div>
+          <a href="mailto:contact@trajetpro.fr?subject=Support%20TrajetPro" className="tp-card" style={{
+            padding: 18, display: "flex", alignItems: "center", gap: 14,
             background: "var(--surface)", textDecoration: "none", color: "var(--text)", cursor: "pointer",
           }}>
             <div style={{
-              width: 36, height: 36, borderRadius: 10, background: "var(--accent-soft)",
-              color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center",
-            }}><Mail size={16}/></div>
-            <div style={{ fontSize: 12, fontWeight: 700 }}>Email</div>
-            <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Sous 24h ouvrées</div>
+              width: 44, height: 44, borderRadius: 11, background: "var(--accent-soft)",
+              color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+            }}><Mail size={20}/></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>Nous contacter par email</div>
+              <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>contact@trajetpro.fr · réponse sous 24h ouvrées</div>
+            </div>
+            <ArrowUpRight size={16} style={{ color: "var(--accent)", flexShrink: 0 }}/>
           </a>
-          <button className="tp-card" style={{
-            padding: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
-            background: "var(--surface)", cursor: "pointer", border: "1px solid var(--border)", color: "var(--text)",
-          }}>
-            <div style={{
-              width: 36, height: 36, borderRadius: 10, background: "var(--accent-soft)",
-              color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center",
-            }}><MessageCircle size={16}/></div>
-            <div style={{ fontSize: 12, fontWeight: 700 }}>Chat en direct</div>
-            <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Lun-Ven · 9h-18h</div>
-          </button>
         </div>
 
         {/* Le bloc "Guide d'utilisation / Tutoriels vidéo" a été retiré
@@ -3937,7 +3946,10 @@ const DEFAULT_PREFERENCES = {
   // depuis ALL_REMINDER_OFFSETS dans notifications.js).
   reminderOffsets: ['T3h', 'T1h', 'T15m'],
   vatRate: 10, autoNumbering: true,
-  biometric: true, autoBackup: true,
+  // biometric : par défaut désactivée. Sera lue depuis Capacitor Preferences
+  // au démarrage via le useEffect qui appelle isBiometricEnabled() — on ne
+  // veut PAS afficher "Activée" sans avoir réellement enregistré une empreinte.
+  biometric: false, autoBackup: true,
 };
 
 // Convertit une ligne `bookings` Supabase vers le format utilisé côté React.
@@ -4108,6 +4120,20 @@ export default function App() {
     if (!isGuest) return;
     preferencesSet('guest_token_balance', String(Math.max(0, tokenBalance))).catch(() => {});
   }, [tokenBalance, isGuest]);
+
+  // --- Biométrie : sync l'état "activée/désactivée" depuis Capacitor
+  //     Preferences au démarrage de l'app. Sur le web (Vite dev) le helper
+  //     retourne toujours false, donc le toggle reste "off" et grisé pour
+  //     indiquer que la fonction n'est dispo que sur mobile.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const enabled = await isBiometricEnabled();
+      if (cancelled) return;
+      setPreferences((p) => ({ ...p, biometric: enabled }));
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // --- Préférence "Rappel de courses" : si désactivée → annule tout,
   //     si réactivée → replanifie tout. Se déclenche aussi quand `bookings`
@@ -4681,7 +4707,26 @@ export default function App() {
     setPurchaseOpen(true);
   };
 
-  const onChangePref = (key, value) => {
+  const onChangePref = async (key, value) => {
+    // Cas spécial : la biométrie nécessite un vrai prompt système Face ID
+    // / Touch ID via le plugin Capacitor. On bypass le mapping normal pour
+    // déclencher le bon flow + persister via Capacitor Preferences (et pas
+    // dans l'objet `preferences` côté React, qui est en mémoire seulement).
+    if (key === 'bio') {
+      if (value) {
+        // L'utilisateur veut activer : on prompt Face ID pour confirmer
+        const result = await enableBiometric();
+        if (!result.ok) {
+          alert(result.reason || 'Activation de la biométrie échouée.');
+          return;
+        }
+      } else {
+        await disableBiometric();
+      }
+      setPreferences(p => ({ ...p, biometric: value }));
+      return;
+    }
+
     const mapping = {
       lang: "language", currency: "currency", theme: "theme",
       notif_rides: "notifRides", notif_invoices: "notifInvoices", notif_marketing: "notifMarketing",
@@ -4807,7 +4852,8 @@ export default function App() {
         screen = <ProfileScreen onGoTab={setTab} tokenBalance={tokenBalance}
           currentUser={currentUser} isGuest={isGuest}
           onLogout={onLogout} onPromptSignup={onPromptSignup}
-          onEditProfile={() => setProfileEditOpen(true)}/>;
+          onEditProfile={() => setProfileEditOpen(true)}
+          biometricEnabled={preferences.biometric}/>;
         break;
       default:
         screen = null;

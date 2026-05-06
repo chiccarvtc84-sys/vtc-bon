@@ -54,6 +54,10 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>TrajetPro a besoin du microphone pour la dictée vocale, qui permet de créer un bon de course en quelques secondes.</string>
 
+	<!-- Face ID / Touch ID : sécurisation de l'ouverture de l'app (optionnel, activable depuis Profil → Préférences → Biométrie) -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>TrajetPro utilise Face ID pour sécuriser l'accès à votre compte VTC sans avoir à retaper votre mot de passe à chaque ouverture.</string>
+
 	<!-- Reconnaissance vocale : iOS sépare l'accès au micro et à la transcription -->
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>TrajetPro utilise la reconnaissance vocale pour transcrire votre dictée et pré-remplir le formulaire de course.</string>
