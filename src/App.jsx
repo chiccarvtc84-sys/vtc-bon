@@ -415,19 +415,21 @@ const GlobalStyles = () => (
        il prend toute la largeur. */
     .tp-root {
       width: 100%;
-      height: 100dvh;
+      height: 100vh;
       display: flex;
       justify-content: center;
       background: var(--bg);
       overflow: hidden;
     }
-    /* tp-phone : la "boîte téléphone" — exactement la hauteur du viewport,
-       pas de scroll global, layout flex column pour empiler le contenu
-       (écran courant) + la nav du bas. */
+    /* tp-phone : la "boîte téléphone" — exactement la hauteur de l'écran
+       (incluant la safe-area du home indicator iPhone), pas de scroll
+       global, layout flex column pour empiler le contenu (écran courant)
+       + la nav du bas. La nav extends bien jusqu'au tout dernier pixel
+       en bas → plus aucun blanc visible dans la zone home indicator. */
     .tp-phone {
       width: 100%;
       max-width: 430px;
-      height: 100dvh;
+      height: 100vh;
       display: flex;
       flex-direction: column;
       background: var(--bg-gradient);
@@ -647,23 +649,8 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
   const todayBookings = bookings.filter(b => new Date(b.dateTime).toDateString() === today.toDateString());
   const weekRevenue = invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.amount, 0);
 
-  // ─── Stats du mois en cours (utiles pour déclaration URSSAF / TVA) ────
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-  const monthBookings = bookings.filter((b) => {
-    const dt = new Date(b.dateTime);
-    return dt >= monthStart && dt < monthEnd;
-  });
-  const monthInvoices = invoices.filter((i) => {
-    const dt = new Date(i.date);
-    return dt >= monthStart && dt < monthEnd;
-  });
-  const monthRevenueTTC = monthInvoices.reduce((s, i) => s + (i.amount || 0), 0);
-  const monthVAT = monthInvoices.reduce((s, i) => s + (i.vatAmount || 0), 0);
-  const monthLabel = today.toLocaleDateString('fr-FR', { month: 'long' });
-
   return (
-    <div className="tp-scroll tp-no-scroll tp-fade-in">
+    <div className="tp-scroll tp-no-scroll tp-fade-in" style={{ display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "28px 20px 8px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
           <div>
@@ -699,69 +686,35 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
       </div>
 
       {/* ─── Stats du mois — vue rapide pour déclaration URSSAF/TVA ─── */}
-      <div style={{ padding: "16px 20px 0" }}>
-        <div className="tp-label" style={{ marginBottom: 8, padding: "0 2px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span>📊 Ce mois — {monthLabel}</span>
-          <button onClick={() => onGoTab("invoices")} style={{
-            fontSize: 10, color: "var(--accent)", background: "none", border: "none",
-            cursor: "pointer", fontWeight: 600, padding: 0,
-          }}>Voir factures →</button>
-        </div>
-        <div className="tp-card" style={{ padding: 14, background: "var(--surface)" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-            <div>
-              <div style={{ fontSize: 9, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Courses</div>
-              <div className="tp-serif" style={{ fontSize: 22, fontWeight: 600, marginTop: 2 }}>{monthBookings.length}</div>
-            </div>
-            <div style={{ borderLeft: "1px solid var(--border)", paddingLeft: 10 }}>
-              <div style={{ fontSize: 9, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>CA TTC</div>
-              <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600, marginTop: 2, color: "var(--accent)" }}>{eur(monthRevenueTTC)}</div>
-            </div>
-            <div style={{ borderLeft: "1px solid var(--border)", paddingLeft: 10 }}>
-              <div style={{ fontSize: 9, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>TVA 10%</div>
-              <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600, marginTop: 2, color: "var(--text-dim)" }}>{eur(monthVAT)}</div>
-            </div>
-          </div>
-          {monthInvoices.length > 0 && (
-            <button onClick={() => {
-              const result = exportInvoicesCsv(invoices, bookings, today);
-              alert(`✅ Export CSV téléchargé : ${result.count} facture(s).\n\nÀ envoyer à votre comptable.`);
-            }} className="tp-btn tp-btn-ghost" style={{ width: "100%", marginTop: 12, fontSize: 12, justifyContent: "center" }}>
-              <Download size={13}/> Exporter ce mois en CSV
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div style={{ padding: "16px 20px 0" }}>
+      <div style={{ padding: "18px 20px 0" }}>
         <button onClick={onQuickVoice} className="tp-card-elevated" style={{
-          width: "100%", padding: 18, display: "flex", alignItems: "center", gap: 14,
+          width: "100%", padding: 20, display: "flex", alignItems: "center", gap: 14,
           cursor: "pointer", textAlign: "left", border: "1px solid var(--accent-ring)",
           background: "linear-gradient(135deg, rgba(244,185,66,0.15), rgba(244,185,66,0.02))",
         }}>
-          <div style={{ width: 44, height: 44, borderRadius: 12, background: "var(--accent)", color: "#0B0B0D", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Mic size={22} strokeWidth={2.2}/>
+          <div style={{ width: 48, height: 48, borderRadius: 13, background: "var(--accent)", color: "#0B0B0D", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 4px 12px -4px rgba(244,185,66,0.5)" }}>
+            <Mic size={24} strokeWidth={2.2}/>
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>Nouveau bon vocal</div>
-            <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>
-              Dictez votre course · <span style={{ color: "var(--accent)" }}>1 crédit</span>
+            <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.01em" }}>Nouveau bon vocal</div>
+            <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 3 }}>
+              Dictez votre course · <span style={{ color: "var(--accent)", fontWeight: 600 }}>1 crédit</span>
             </div>
           </div>
-          <Sparkles size={16} style={{ color: "var(--accent)" }}/>
+          <Sparkles size={18} style={{ color: "var(--accent)" }}/>
         </button>
       </div>
 
-      <div style={{ padding: "16px 20px 0", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+      <div style={{ padding: "18px 20px 0", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
         {[
           { icon: Plus, label: "Manuel", onClick: onNewBooking },
-          { icon: FileCheck, label: "Devis", onClick: () => onGoTab("bookings") },
+          { icon: Car, label: "Courses", onClick: () => onGoTab("bookings") },
           { icon: Receipt, label: "Factures", onClick: () => onGoTab("invoices") },
           { icon: Calendar, label: "Agenda", onClick: () => onGoTab("bookings") },
         ].map((a, i) => (
-          <button key={i} onClick={a.onClick} className="tp-card" style={{ padding: "12px 4px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer", background: "var(--surface)" }}>
-            <a.icon size={18} style={{ color: "var(--accent)" }}/>
-            <span style={{ fontSize: 11, fontWeight: 600 }}>{a.label}</span>
+          <button key={i} onClick={a.onClick} className="tp-card" style={{ padding: "14px 4px", display: "flex", flexDirection: "column", alignItems: "center", gap: 7, cursor: "pointer", background: "var(--surface)" }}>
+            <a.icon size={20} style={{ color: "var(--accent)" }}/>
+            <span style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.01em" }}>{a.label}</span>
           </button>
         ))}
       </div>
@@ -778,16 +731,21 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
         </div>
       </div>
 
-      <div style={{ padding: "20px 20px 0" }}>
-        <div className="tp-card" style={{ padding: 14, display: "flex", gap: 12, alignItems: "center", background: "var(--surface)" }}>
-          <div style={{ width: 36, height: 36, borderRadius: 10, background: "var(--success-soft)", color: "var(--success)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <Shield size={18}/>
+      {/* marginTop: auto → la carte Conformité est poussée tout en bas
+          de la zone visible (juste au-dessus de la BottomNav). Combiné au
+          display:flex column du wrapper, ça fait un layout type "header +
+          contenu + footer" qui comble naturellement l'espace vide en bas
+          des grands iPhone (Pro Max, 16+) — plus aucune bande noire/blanche. */}
+      <div style={{ padding: "20px 20px 12px", marginTop: "auto" }}>
+        <div className="tp-card" style={{ padding: 16, display: "flex", gap: 14, alignItems: "center", background: "linear-gradient(135deg, rgba(16,185,129,0.10), rgba(16,185,129,0.02))", border: "1px solid rgba(16,185,129,0.25)" }}>
+          <div style={{ width: 42, height: 42, borderRadius: 12, background: "var(--success-soft)", color: "var(--success)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <Shield size={20}/>
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Conformité décret 2017-483</div>
-            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>Tous les bons comportent les mentions obligatoires</div>
+            <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: "-0.01em" }}>Conformité décret 2017-483</div>
+            <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 3, lineHeight: 1.4 }}>Tous vos bons comportent les mentions obligatoires</div>
           </div>
-          <CheckCircle2 size={18} style={{ color: "var(--success)" }}/>
+          <CheckCircle2 size={20} style={{ color: "var(--success)", flexShrink: 0 }}/>
         </div>
       </div>
     </div>

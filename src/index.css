@@ -29,13 +29,14 @@ body,
 #root {
   margin: 0;
   padding: 0;
-  /* 100dvh = "dynamic viewport height" : la VRAIE hauteur visible de
-     l'écran, qui s'adapte aux barres iOS qui se rétractent (Safari) et
-     aux notch / Dynamic Island. 100vh utilise la valeur "max" qui inclut
-     les zones cachées → causait du scroll inutile et des bandes blanches.
-     Fallback 100% pour les anciens navigateurs qui ne connaissent pas dvh. */
+  /* En Capacitor (WKWebView native, pas de barre d'adresse dynamique),
+     100vh = la hauteur RÉELLE de l'écran INCLUANT les safe-area (notch
+     en haut, home indicator en bas). C'est ce qu'on veut pour que le
+     fond noir #0B0B0D couvre toute la surface, y compris la zone du
+     home indicator iPhone — comme les apps natives.
+     Fallback 100% pour les très vieux navigateurs. */
   height: 100%;
-  height: 100dvh;
+  height: 100vh;
   background: var(--tp-bg);
   color: var(--tp-text);
   font-family: var(--tp-font-body);
