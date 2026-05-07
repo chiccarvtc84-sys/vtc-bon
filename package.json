@@ -19,7 +19,7 @@
     "cap:run:ios": "npm run cap:sync && cap run ios"
   },
   "dependencies": {
-    "@aparajita/capacitor-biometric-auth": "^10.0.0",
+    "@aparajita/capacitor-biometric-auth": "^9.1.2",
     "@capacitor/android": "^7.0.0",
     "@capacitor/app": "^7.0.0",
     "@capacitor/core": "^7.0.0",
