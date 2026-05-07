@@ -401,6 +401,25 @@ const GlobalStyles = () => (
       --warn-soft: rgba(251,191,36,0.12);
     }
 
+    /* ─── THÈME CLAIR ─────────────────────────────────────────────────
+       Activé via document.documentElement.setAttribute('data-theme','light').
+       On override TOUTES les variables sombres par leur équivalent clair —
+       même charte, mêmes ratios de contraste, mais en inversé. L'accent
+       doré reste identique (signature TrajetPro). */
+    :root[data-theme="light"] {
+      --bg: #FAFAF9;
+      --bg-gradient: radial-gradient(ellipse at top, #FFFFFF 0%, #F5F5F4 50%);
+      --surface: #FFFFFF;
+      --surface-2: #F5F5F4;
+      --surface-3: #E7E5E4;
+      --border: #D6D3D1;
+      --border-soft: #E7E5E4;
+      --text: #1C1917;
+      --text-dim: #57534E;
+      --muted: #78716C;
+      /* L'accent doré reste identique pour préserver l'identité de marque */
+    }
+
     * { box-sizing: border-box; }
 
     .tp-root {
@@ -560,11 +579,13 @@ const GlobalStyles = () => (
       width: 100%; background: var(--surface);
       border-top-left-radius: 24px; border-top-right-radius: 24px;
       border: 1px solid var(--border); border-bottom: none;
-      /* max-height 88vh : laisse de la marge en haut pour qu'on voie qu'il
-         y a un overlay derrière. padding-bottom safe-area : empêche le bouton
-         "Payer" / "Continuer" d'être recouvert par le home indicator iPhone. */
-      max-height: 88vh; overflow-y: auto;
-      padding-bottom: max(16px, env(safe-area-inset-bottom));
+      /* max-height 82vh : la sheet est nettement remontée → on voit bien
+         le contenu derrière + les boutons "Continuer" / "Payer" sont à
+         hauteur ergonomique, plus en limite basse de l'écran.
+         padding-bottom safe-area + 24px : vrai espace tactile sous le bouton,
+         jamais recouvert par le home indicator iPhone. */
+      max-height: 82vh; overflow-y: auto;
+      padding-bottom: calc(env(safe-area-inset-bottom) + 24px);
       animation: tp-slide-up 0.3s cubic-bezier(0.22, 1, 0.36, 1);
     }
     @keyframes tp-slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
@@ -727,8 +748,8 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
         ))}
       </div>
 
-      <div style={{ padding: "16px 20px 0" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+      <div style={{ padding: "12px 20px 0" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600 }}>Prochaines courses</div>
           <button onClick={() => onGoTab("bookings")} style={{ fontSize: 12, color: "var(--accent)", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
             Tout voir <ArrowUpRight size={12}/>
@@ -739,11 +760,9 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
         </div>
       </div>
 
-      {/* Carte Conformité en flux normal (sans marginTop:auto) — elle suit
-          immédiatement la liste des courses au lieu d'être collée à la
-          BottomNav. Le layout est ainsi compact, sans énorme vide vertical
-          au milieu sur les iPhone Pro Max. */}
-      <div style={{ padding: "14px 20px 0" }}>
+      {/* Carte Conformité en flux normal — suit immédiatement la liste
+          des courses, layout compact sans vide vertical sur iPhone Pro Max. */}
+      <div style={{ padding: "10px 20px 0" }}>
         <div className="tp-card" style={{ padding: 16, display: "flex", gap: 14, alignItems: "center", background: "linear-gradient(135deg, rgba(16,185,129,0.10), rgba(16,185,129,0.02))", border: "1px solid rgba(16,185,129,0.25)" }}>
           <div style={{ width: 42, height: 42, borderRadius: 12, background: "var(--success-soft)", color: "var(--success)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <Shield size={20}/>
@@ -4122,10 +4141,24 @@ function BillingScreen({ onBack, invoiceSettings = {}, onUpdateInvoiceSettings }
    ------------------------------------------------------------------------- */
 function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount, invoiceSettings = {}, onUpdateInvoiceSettings, onGoTab }) {
   const groups = [
-    // Bloc "Affichage" (langue / devise / thème) retiré pour la v1.0 :
-    // l'app est française, en euros, et avec un thème sombre signature.
-    // Les options multi-langues et thème clair sont prévues pour une v1.1
-    // future. En attendant on évite l'illusion de fonctionnalités.
+    // Bloc "Affichage" : seul le thème est fonctionnel (sombre ↔ clair),
+    // langue et devise sont prévues pour la v1.1 (multi-pays). Le toggle
+    // thème applique data-theme="light"/"dark" sur :root → toutes les
+    // variables CSS basculent en cascade, en un seul clic.
+    {
+      title: "Affichage", items: [
+        {
+          id: "theme",
+          icon: Moon,
+          label: "Thème",
+          type: "toggle",
+          value: preferences.theme === "light",
+          // Toggle : OFF = sombre (signature), ON = clair
+          // (label dynamique pour la lisibilité)
+          dynamicLabel: preferences.theme === "light" ? "Clair" : "Sombre",
+        },
+      ]
+    },
     {
       title: "Notifications", items: [
         { id: "notif_rides", icon: Bell, label: "Rappel de courses", type: "toggle", value: preferences.notifRides },
@@ -4767,6 +4800,26 @@ export default function App() {
       const enabled = await isBiometricEnabled();
       if (cancelled) return;
       setPreferences((p) => ({ ...p, biometric: enabled }));
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // ─── Restauration du thème au démarrage ────────────────────────────
+  // Le choix sombre/clair est persisté via Capacitor Preferences.
+  // On le restaure ici en appliquant data-theme sur :root + en
+  // synchronisant l'état React. Sans ce useEffect, l'utilisateur perd
+  // son choix à chaque relance d'app.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const saved = await preferencesGet('theme');
+        if (cancelled) return;
+        if (saved === 'light') {
+          document.documentElement.setAttribute('data-theme', 'light');
+          setPreferences((p) => ({ ...p, theme: 'light' }));
+        }
+      } catch {}
     })();
     return () => { cancelled = true; };
   }, []);
@@ -5453,8 +5506,24 @@ export default function App() {
       return;
     }
 
+    // Cas spécial : thème — applique IMMÉDIATEMENT data-theme sur :root
+    // pour que toutes les variables CSS basculent (charte sombre ↔ claire).
+    // Persiste via Capacitor Preferences pour conserver le choix entre
+    // les sessions (sinon retombe en mode sombre par défaut au reboot).
+    if (key === 'theme') {
+      const newTheme = value ? 'light' : 'dark';
+      if (newTheme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+      } else {
+        document.documentElement.removeAttribute('data-theme');
+      }
+      try { await preferencesSet('theme', newTheme); } catch {}
+      setPreferences(p => ({ ...p, theme: newTheme }));
+      return;
+    }
+
     const mapping = {
-      lang: "language", currency: "currency", theme: "theme",
+      lang: "language", currency: "currency",
       notif_rides: "notifRides", notif_invoices: "notifInvoices", notif_marketing: "notifMarketing",
       vat: "vatRate", autonum: "autoNumbering",
       bio: "biometric", backup: "autoBackup",
