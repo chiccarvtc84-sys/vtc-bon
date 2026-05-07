@@ -462,16 +462,24 @@ export async function createBooking(userId, booking) {
 
   if (error) throw error;
 
-  // Consommation d'un crédit
-  const { data: consumed } = await supabase.rpc('consume_tokens', {
+  // Consommation d'un crédit. On capture explicitement l'erreur RPC pour
+  // ne pas masquer un vrai problème (RLS, permission, lock, etc.) en
+  // affichant "Crédits insuffisants" alors que le user a 100+ crédits.
+  const { data: consumed, error: consumeErr } = await supabase.rpc('consume_tokens', {
     p_user_id: userId,
     p_amount: 1,
     p_kind: 'consume_booking',
     p_related_id: data.id,
   });
 
+  if (consumeErr) {
+    // Rollback puis remontée de l'erreur réelle (lisible par l'UI).
+    await supabase.from('bookings').delete().eq('id', data.id);
+    throw new Error(`consume_tokens RPC échouée : ${consumeErr.message || consumeErr}`);
+  }
+
   if (!consumed) {
-    // Rollback : supprimer le bon créé
+    // Le serveur a légitimement refusé : solde DB insuffisant.
     await supabase.from('bookings').delete().eq('id', data.id);
     throw new Error("Crédits insuffisants");
   }
@@ -573,13 +581,19 @@ export async function createInvoice(userId, booking) {
 
   if (error) throw error;
 
-  // Consommation d'un crédit
-  const { data: consumed } = await supabase.rpc('consume_tokens', {
+  // Consommation d'un crédit (avec capture explicite de l'erreur RPC,
+  // cf. createBooking pour la justif).
+  const { data: consumed, error: consumeErr } = await supabase.rpc('consume_tokens', {
     p_user_id: userId,
     p_amount: 1,
     p_kind: 'consume_invoice',
     p_related_id: data.id,
   });
+
+  if (consumeErr) {
+    await supabase.from('invoices').delete().eq('id', data.id);
+    throw new Error(`consume_tokens RPC échouée : ${consumeErr.message || consumeErr}`);
+  }
 
   if (!consumed) {
     await supabase.from('invoices').delete().eq('id', data.id);

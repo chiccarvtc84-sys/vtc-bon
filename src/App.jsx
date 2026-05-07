@@ -579,13 +579,13 @@ const GlobalStyles = () => (
       width: 100%; background: var(--surface);
       border-top-left-radius: 24px; border-top-right-radius: 24px;
       border: 1px solid var(--border); border-bottom: none;
-      /* max-height 82vh : la sheet est nettement remontée → on voit bien
-         le contenu derrière + les boutons "Continuer" / "Payer" sont à
-         hauteur ergonomique, plus en limite basse de l'écran.
-         padding-bottom safe-area + 24px : vrai espace tactile sous le bouton,
-         jamais recouvert par le home indicator iPhone. */
-      max-height: 82vh; overflow-y: auto;
-      padding-bottom: calc(env(safe-area-inset-bottom) + 24px);
+      /* max-height 92vh : la sheet utilise quasi tout l'écran de hauteur
+         pour que les boutons "Continuer" / "Payer" rentrent confortablement
+         à la fin du contenu sans avoir à scroller pour les atteindre.
+         padding-bottom safe-area + 28px : zone tactile généreuse sous le
+         bouton final, jamais recouvert par le home indicator iPhone. */
+      max-height: 92vh; overflow-y: auto;
+      padding-bottom: calc(env(safe-area-inset-bottom) + 28px);
       animation: tp-slide-up 0.3s cubic-bezier(0.22, 1, 0.36, 1);
     }
     @keyframes tp-slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
@@ -748,8 +748,8 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
         ))}
       </div>
 
-      <div style={{ padding: "12px 20px 0" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+      <div style={{ padding: "20px 20px 0" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600 }}>Prochaines courses</div>
           <button onClick={() => onGoTab("bookings")} style={{ fontSize: 12, color: "var(--accent)", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
             Tout voir <ArrowUpRight size={12}/>
@@ -760,9 +760,9 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
         </div>
       </div>
 
-      {/* Carte Conformité en flux normal — suit immédiatement la liste
-          des courses, layout compact sans vide vertical sur iPhone Pro Max. */}
-      <div style={{ padding: "10px 20px 0" }}>
+      {/* Carte Conformité en flux normal après la liste des courses,
+          avec un espace de 18px qui aère le layout sans coller à la nav. */}
+      <div style={{ padding: "18px 20px 0" }}>
         <div className="tp-card" style={{ padding: 16, display: "flex", gap: 14, alignItems: "center", background: "linear-gradient(135deg, rgba(16,185,129,0.10), rgba(16,185,129,0.02))", border: "1px solid rgba(16,185,129,0.25)" }}>
           <div style={{ width: 42, height: 42, borderRadius: 12, background: "var(--success-soft)", color: "var(--success)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <Shield size={20}/>
@@ -5204,21 +5204,54 @@ export default function App() {
     setFormOpen(true);
   };
 
-  const onOpenVoice = () => {
-    if (tokenBalance < COST_BOOKING) {
-      setPendingActionLabel("créer une nouvelle réservation");
-      setInsufficientOpen(true);
-      return;
+  // Helper : on vérifie le solde EN DB (et pas juste l'état React qui peut
+  // être périmé après une longue session, un changement d'appareil, etc.)
+  // avant d'afficher la modal "Insuffisant". Ainsi un user qui voit son
+  // badge à 0 mais qui a en réalité 100 crédits en base ne sera plus bloqué.
+  const guardEnoughTokens = async (label) => {
+    if (isGuest) {
+      // Mode invité : seul le solde local fait foi
+      if (tokenBalance < COST_BOOKING) {
+        setPendingActionLabel(label);
+        setInsufficientOpen(true);
+        return false;
+      }
+      return true;
     }
+    // Mode authentifié : on resync depuis la DB pour être sûr
+    if (currentUser?.id) {
+      try {
+        const { data: profile } = await supabase
+          .from('users')
+          .select('token_balance')
+          .eq('id', currentUser.id)
+          .single();
+        const fresh = profile?.token_balance ?? tokenBalance;
+        setTokenBalance(fresh);
+        if (fresh < COST_BOOKING) {
+          setPendingActionLabel(label);
+          setInsufficientOpen(true);
+          return false;
+        }
+      } catch {
+        // En cas d'échec on retombe sur l'état local
+        if (tokenBalance < COST_BOOKING) {
+          setPendingActionLabel(label);
+          setInsufficientOpen(true);
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  const onOpenVoice = async () => {
+    if (!(await guardEnoughTokens("créer une nouvelle réservation"))) return;
     setVoiceOpen(true);
   };
 
-  const onNewBooking = () => {
-    if (tokenBalance < COST_BOOKING) {
-      setPendingActionLabel("créer une nouvelle réservation");
-      setInsufficientOpen(true);
-      return;
-    }
+  const onNewBooking = async () => {
+    if (!(await guardEnoughTokens("créer une nouvelle réservation"))) return;
     setFormInitial(null);
     setFormOpen(true);
   };
