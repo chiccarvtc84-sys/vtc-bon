@@ -301,11 +301,26 @@ export async function signInWithApple() {
   if (isIOSNative) {
     const { SignInWithApple } = await import('@capacitor-community/apple-sign-in');
 
-    // Nonce de sécurité : généré côté client, hashé pour l'envoi à Apple,
-    // puis vérifié par Supabase quand on échange le token. Empêche les
-    // attaques de rejeu.
-    const rawNonce = (Array.from(crypto.getRandomValues(new Uint8Array(16)))
-      .map((b) => b.toString(16).padStart(2, '0')).join(''));
+    // Sécurité du nonce — IMPORTANT, double valeur :
+    //   1. rawNonce : généré côté client, gardé en mémoire JS
+    //   2. hashedNonce : SHA-256(rawNonce), envoyé à Apple via le plugin
+    //
+    // Apple inclut le hashedNonce TEL QUEL dans le JWT id_token (sans
+    // le re-hasher). Supabase, lui, hash automatiquement le rawNonce qu'on
+    // lui passe puis compare avec celui du JWT → match parfait.
+    //
+    // Ce double-saut empêche un attaquant qui intercepterait la requête
+    // vers Apple de connaître le rawNonce (il n'aurait que son hash),
+    // et garantit que le JWT a bien été émis pour notre session précise
+    // (anti-replay).
+    const rawNonce = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+      .map((b) => b.toString(16).padStart(2, '0')).join('');
+
+    // Hash SHA-256 hex via WebCrypto (dispo dans WKWebView iOS).
+    const enc = new TextEncoder().encode(rawNonce);
+    const hashBuf = await crypto.subtle.digest('SHA-256', enc);
+    const hashedNonce = Array.from(new Uint8Array(hashBuf))
+      .map((b) => b.toString(16).padStart(2, '0')).join('');
 
     const result = await SignInWithApple.authorize({
       // clientId = Service ID configuré dans Apple Developer Console
@@ -316,7 +331,7 @@ export async function signInWithApple() {
       redirectURI: 'https://olmhckwethdcxhvsrfie.supabase.co/auth/v1/callback',
       scopes: 'email name',
       state: rawNonce,
-      nonce: rawNonce,
+      nonce: hashedNonce, // ← HASHÉ pour Apple
     });
 
     const idToken = result?.response?.identityToken;
@@ -328,7 +343,7 @@ export async function signInWithApple() {
     const { data, error } = await supabase.auth.signInWithIdToken({
       provider: 'apple',
       token: idToken,
-      nonce: rawNonce,
+      nonce: rawNonce, // ← BRUT pour Supabase (qui hashera côté serveur)
     });
 
     if (error) {
