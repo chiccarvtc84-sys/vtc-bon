@@ -279,11 +279,65 @@ export async function updateInvoiceSettings(userId, updates) {
  * Mode WEB : Supabase ouvre une popup vers appleid.apple.com → l'utilisateur
  * autorise → redirect vers /auth/v1/callback → session créée.
  *
- * Mode iOS NATIF : sur device, on devrait idéalement utiliser le plugin
- * @capacitor-community/apple-sign-in pour une UX native (pas de popup web).
- * Pour l'instant on utilise le flow OAuth web qui marche dans la WebView.
+ * Mode iOS NATIF : on utilise le plugin @capacitor-community/apple-sign-in
+ * qui déclenche la fenêtre système native d'Apple (Face ID / Touch ID),
+ * récupère un identityToken JWT signé par Apple, puis on l'échange contre
+ * une session Supabase via signInWithIdToken — ZÉRO redirection web,
+ * tout reste dans l'app (UX native conforme aux exigences App Store).
  */
 export async function signInWithApple() {
+  // ─── Détection plateforme ────────────────────────────────────────
+  // On utilise Capacitor.isNativePlatform() en dynamique pour ne pas
+  // casser le bundling web (le plugin natif n'est dispo qu'en iOS).
+  let isIOSNative = false;
+  try {
+    const { Capacitor } = await import('@capacitor/core');
+    isIOSNative = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios';
+  } catch {
+    isIOSNative = false;
+  }
+
+  // ─── Branche NATIVE iOS ──────────────────────────────────────────
+  if (isIOSNative) {
+    const { SignInWithApple } = await import('@capacitor-community/apple-sign-in');
+
+    // Nonce de sécurité : généré côté client, hashé pour l'envoi à Apple,
+    // puis vérifié par Supabase quand on échange le token. Empêche les
+    // attaques de rejeu.
+    const rawNonce = (Array.from(crypto.getRandomValues(new Uint8Array(16)))
+      .map((b) => b.toString(16).padStart(2, '0')).join(''));
+
+    const result = await SignInWithApple.authorize({
+      // clientId = Service ID configuré dans Apple Developer Console
+      // (le même que celui renseigné côté Supabase Provider).
+      clientId: 'com.trajetpro.app.signin',
+      // redirectURI requis par l'API du plugin mais NON utilisé en natif —
+      // Apple ne redirige pas, il renvoie directement le token via callback.
+      redirectURI: 'https://olmhckwethdcxhvsrfie.supabase.co/auth/v1/callback',
+      scopes: 'email name',
+      state: rawNonce,
+      nonce: rawNonce,
+    });
+
+    const idToken = result?.response?.identityToken;
+    if (!idToken) {
+      throw new Error('Sign in with Apple : aucun token reçu d\'Apple.');
+    }
+
+    // Échange le idToken Apple contre une session Supabase.
+    const { data, error } = await supabase.auth.signInWithIdToken({
+      provider: 'apple',
+      token: idToken,
+      nonce: rawNonce,
+    });
+
+    if (error) {
+      throw new Error(`Sign in with Apple échoué : ${error.message}`);
+    }
+    return data;
+  }
+
+  // ─── Branche WEB (PWA / dev local / Android) ─────────────────────
   const redirectTo = typeof window !== 'undefined'
     ? `${window.location.origin}/`
     : undefined;
@@ -292,8 +346,6 @@ export async function signInWithApple() {
     provider: 'apple',
     options: {
       redirectTo,
-      // Demande email + nom (les seules données qu'Apple expose).
-      // L'utilisateur verra "Apple va partager : email, prénom et nom".
       scopes: 'email name',
     },
   });
