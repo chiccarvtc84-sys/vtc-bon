@@ -29,7 +29,13 @@ body,
 #root {
   margin: 0;
   padding: 0;
+  /* 100dvh = "dynamic viewport height" : la VRAIE hauteur visible de
+     l'écran, qui s'adapte aux barres iOS qui se rétractent (Safari) et
+     aux notch / Dynamic Island. 100vh utilise la valeur "max" qui inclut
+     les zones cachées → causait du scroll inutile et des bandes blanches.
+     Fallback 100% pour les anciens navigateurs qui ne connaissent pas dvh. */
   height: 100%;
+  height: 100dvh;
   background: var(--tp-bg);
   color: var(--tp-text);
   font-family: var(--tp-font-body);
@@ -38,12 +44,18 @@ body,
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overscroll-behavior: none;
+  /* Empêche le body de scroller — chaque écran gère son propre scroll
+     en interne via `tp-scroll`. Évite que la page entière scrolle et
+     fasse apparaître des bandes blanches au-dessus / en-dessous. */
+  overflow: hidden;
 }
 
 body {
-  /* Safe area iOS notch / dynamic island */
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
+  /* IMPORTANT : pas de padding pour safe-area sur le body. Sinon body
+     devient plus grand que le viewport et provoque le scroll global qui
+     cause les bandes blanches. La gestion safe-area est faite dans
+     `tp-scroll` (App.jsx) pour rester DANS le viewport. */
+  background: var(--tp-bg);
 }
 
 h1,

@@ -406,17 +406,58 @@ const GlobalStyles = () => (
     .tp-root {
       font-family: 'Plus Jakarta Sans', -apple-system, system-ui, sans-serif;
       background: var(--bg); color: var(--text);
-      min-height: 100vh; letter-spacing: -0.01em;
+      letter-spacing: -0.01em;
       -webkit-font-smoothing: antialiased;
     }
     .tp-serif { font-family: 'Fraunces', Georgia, serif; font-variation-settings: "SOFT" 50; letter-spacing: -0.02em; }
-    .tp-phone {
-      max-width: 430px; margin: 0 auto; min-height: 100vh;
-      background: var(--bg-gradient); position: relative;
-      border-left: 1px solid var(--border-soft); border-right: 1px solid var(--border-soft);
-      overflow-x: hidden;
+    /* tp-root : container racine qui prend tout le viewport.
+       Centré horizontalement pour tablettes/desktop, mais en mobile
+       il prend toute la largeur. */
+    .tp-root {
+      width: 100%;
+      height: 100dvh;
+      display: flex;
+      justify-content: center;
+      background: var(--bg);
+      overflow: hidden;
     }
-    .tp-scroll { padding-bottom: 110px; }
+    /* tp-phone : la "boîte téléphone" — exactement la hauteur du viewport,
+       pas de scroll global, layout flex column pour empiler le contenu
+       (écran courant) + la nav du bas. */
+    .tp-phone {
+      width: 100%;
+      max-width: 430px;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-gradient);
+      position: relative;
+      border-left: 1px solid var(--border-soft);
+      border-right: 1px solid var(--border-soft);
+      overflow: hidden;
+    }
+    /* tp-scroll : container d'écran scrollable.
+       - flex: 1 → prend tout l'espace restant dans tp-phone
+       - overflow-y: auto → SEUL endroit où on scroll
+       - safe-area-inset-top/bottom appliqués ICI (pas sur body)
+         → le scroll reste dans le viewport visible, plus de bandes blanches
+       - padding-bottom 110px = espace pour la BottomNav fixe + safe-area
+       - overscroll-behavior: contain → le scroll ne "rebondit" pas vers le body
+       - -webkit-overflow-scrolling: touch → scroll inertiel iOS */
+    .tp-scroll {
+      flex: 1;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: calc(110px + env(safe-area-inset-bottom));
+    }
+    /* tp-no-scroll : modificateur pour les écrans qui doivent tenir
+       en une seule vue (Accueil, BookingDetail, InvoiceDetail, Tokens, etc.).
+       Override l'overflow pour empêcher tout scroll vertical sur ces écrans. */
+    .tp-no-scroll {
+      overflow: hidden !important;
+    }
 
     .tp-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; }
     .tp-card-elevated {
@@ -461,7 +502,11 @@ const GlobalStyles = () => (
     .tp-nav {
       position: fixed; bottom: 0; left: 0; right: 0;
       background: rgba(11,11,13,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-      border-top: 1px solid var(--border); padding: 10px 14px 20px;
+      border-top: 1px solid var(--border);
+      padding: 10px 14px;
+      /* safe-area : laisse de la marge pour le home indicator iPhone, mais
+         pas plus de 20px au minimum pour que ça reste compact partout */
+      padding-bottom: max(10px, env(safe-area-inset-bottom));
       display: flex; justify-content: space-around; align-items: center; z-index: 40;
     }
     .tp-phone .tp-nav { position: absolute; max-width: 430px; margin: 0 auto; }
@@ -618,7 +663,7 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
   const monthLabel = today.toLocaleDateString('fr-FR', { month: 'long' });
 
   return (
-    <div className="tp-scroll tp-fade-in">
+    <div className="tp-scroll tp-no-scroll tp-fade-in">
       <div style={{ padding: "28px 20px 8px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
           <div>
@@ -1657,7 +1702,7 @@ function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplica
   };
 
   return (
-    <div className="tp-scroll tp-fade-in">
+    <div className="tp-scroll tp-no-scroll tp-fade-in">
       <TopBar title="Bon de course" subtitle={`Réf. ${booking.id.toUpperCase()}`} onBack={onBack}
         rightAction={<button onClick={() => onEdit(booking)} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }}><Edit3 size={16}/></button>}/>
 
@@ -1955,7 +2000,7 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
   };
 
   return (
-    <div className="tp-scroll tp-fade-in">
+    <div className="tp-scroll tp-no-scroll tp-fade-in">
       <TopBar title={invoice.number} subtitle={`Émise le ${formatDate(invoice.date)}`} onBack={onBack}
         rightAction={<button onClick={onDownload} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }} title="Télécharger le PDF"><Download size={16}/></button>}/>
 
@@ -2034,7 +2079,7 @@ function TokensScreen({ tokenBalance, tokenHistory, onOpenPurchase, onOpenPurcha
   const hasWelcomeGift = tokenHistory.some(t => t.isWelcome);
 
   return (
-    <div className="tp-scroll tp-fade-in">
+    <div className="tp-scroll tp-no-scroll tp-fade-in">
       <TopBar title="Gérer mes jetons" subtitle="Rechargez vos crédits" onBack={onBack}/>
 
       <div style={{ padding: "0 20px", display: "flex", flexDirection: "column", gap: 16 }}>
@@ -3105,7 +3150,7 @@ function AuthScreens({ mode, onChangeMode, onLogin, onSignup, onGuest, onDeviceA
 
 function DeviceBlockedScreen({ onChangeMode, info }) {
   return (
-    <div className="tp-scroll tp-fade-in" style={{ minHeight: "100vh", padding: "24px", display: "flex", flexDirection: "column" }}>
+    <div className="tp-scroll tp-fade-in" style={{ minHeight: "100dvh", padding: "24px", display: "flex", flexDirection: "column" }}>
       <button onClick={() => onChangeMode("welcome")} className="tp-btn tp-btn-ghost" style={{ padding: 10, borderRadius: 10, marginBottom: 16, alignSelf: "flex-start" }}>
         <ChevronLeft size={18}/>
       </button>
@@ -3166,7 +3211,7 @@ function DeviceBlockedScreen({ onChangeMode, info }) {
 
 function WelcomeScreen({ onChangeMode, onGuest }) {
   return (
-    <div className="tp-scroll tp-fade-in" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", padding: "40px 24px" }}>
+    <div className="tp-scroll tp-fade-in" style={{ minHeight: "100dvh", display: "flex", flexDirection: "column", padding: "40px 24px" }}>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center" }}>
         {/* Logo */}
         <div style={{
@@ -3262,7 +3307,7 @@ function LoginScreen({ onChangeMode, onLogin }) {
   };
 
   return (
-    <div className="tp-scroll tp-fade-in" style={{ minHeight: "100vh", padding: "24px" }}>
+    <div className="tp-scroll tp-fade-in" style={{ minHeight: "100dvh", padding: "24px" }}>
       <button onClick={() => onChangeMode("welcome")} className="tp-btn tp-btn-ghost" style={{ padding: 10, borderRadius: 10, marginBottom: 16 }}>
         <ChevronLeft size={18}/>
       </button>
@@ -3520,7 +3565,7 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
   // === VUE : Email envoyé, en attente de validation ===
   if (step === "email_sent") {
     return (
-      <div className="tp-scroll tp-fade-in" style={{ minHeight: "100vh", padding: "24px" }}>
+      <div className="tp-scroll tp-fade-in" style={{ minHeight: "100dvh", padding: "24px" }}>
         <button onClick={() => setStep("form")} className="tp-btn tp-btn-ghost" style={{ padding: 10, borderRadius: 10, marginBottom: 16 }}>
           <ChevronLeft size={18}/>
         </button>
@@ -3573,7 +3618,7 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
 
   // === VUE : Formulaire ===
   return (
-    <div className="tp-scroll tp-fade-in" style={{ minHeight: "100vh", padding: "24px" }}>
+    <div className="tp-scroll tp-fade-in" style={{ minHeight: "100dvh", padding: "24px" }}>
       <button onClick={() => onChangeMode("welcome")} className="tp-btn tp-btn-ghost" style={{ padding: 10, borderRadius: 10, marginBottom: 16 }}>
         <ChevronLeft size={18}/>
       </button>
