@@ -2037,7 +2037,7 @@ function TokensScreen({ tokenBalance, tokenHistory, onOpenPurchase, onOpenPurcha
   const hasWelcomeGift = tokenHistory.some(t => t.isWelcome);
 
   return (
-    <div className="tp-scroll tp-no-scroll tp-fade-in">
+    <div className="tp-scroll tp-fade-in">
       <TopBar title="Gérer mes jetons" subtitle="Rechargez vos crédits" onBack={onBack}/>
 
       <div style={{ padding: "0 20px", display: "flex", flexDirection: "column", gap: 16 }}>
@@ -2280,41 +2280,9 @@ function PurchaseModal({ open, onClose, onConfirm }) {
 
           {step === "choose" && (
             <>
-              {/* VAT intracommunity */}
-              <div className="tp-card" style={{ padding: 14, marginBottom: 16, background: "var(--surface)" }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: showVatField ? 12 : 0 }}>
-                  <Info size={16} style={{ color: "var(--accent)", flexShrink: 0, marginTop: 2 }}/>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700 }}>Numéro TVA intracommunautaire</div>
-                    <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2, lineHeight: 1.5 }}>
-                      Si vous possédez un numéro de TVA intracommunautaire valide (hors France), indiquez-le pour bénéficier de l'auto-liquidation de la TVA (art. 283-2 du CGI).
-                    </div>
-                    <button onClick={() => setShowVatField(v => !v)}
-                      style={{ marginTop: 8, fontSize: 12, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 600, padding: 0 }}>
-                      {showVatField ? "Masquer" : "Renseigner mon numéro"}
-                    </button>
-                  </div>
-                </div>
-                {showVatField && (
-                  <div className="tp-fade-in">
-                    <input className="tp-input" placeholder="Ex : BE0123456789"
-                      value={vatIntra} onChange={e => setVatIntra(e.target.value.toUpperCase())}
-                      style={{ fontFamily: "monospace" }}/>
-                    {vatIntra && (
-                      <div style={{ fontSize: 11, marginTop: 6, color: validIntra ? "var(--success)" : "var(--warn)", display: "flex", alignItems: "center", gap: 4 }}>
-                        {validIntra ? <><CheckCircle2 size={12}/> Format valide</> : <><AlertCircle size={12}/> Format non reconnu</>}
-                      </div>
-                    )}
-                    {applyReverseCharge && (
-                      <div className="tp-chip tp-chip-success" style={{ marginTop: 8 }}>
-                        <CheckCircle2 size={11}/> TVA auto-liquidée
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Packs */}
+              {/* Packs (le n° TVA intracommunautaire se renseigne désormais
+                  dans Profil → Facturation, et s'applique automatiquement
+                  ici si présent — UI épurée pour rester sur une seule page) */}
               <div className="tp-label" style={{ marginBottom: 10 }}>Choisissez un pack</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
                 {TOKEN_PACKAGES.map(p => {
@@ -4147,13 +4115,10 @@ function BillingScreen({ onBack, invoiceSettings = {}, onUpdateInvoiceSettings }
    ------------------------------------------------------------------------- */
 function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount, invoiceSettings = {}, onUpdateInvoiceSettings, onGoTab }) {
   const groups = [
-    {
-      title: "Affichage", items: [
-        { id: "lang", icon: Languages, label: "Langue", value: preferences.language, options: [{v:"fr", l:"Français"},{v:"en", l:"English"},{v:"es", l:"Español"}] },
-        { id: "currency", icon: Euro, label: "Devise", value: preferences.currency, options: [{v:"EUR", l:"Euro (€)"},{v:"USD", l:"Dollar ($)"},{v:"GBP", l:"Livre (£)"}] },
-        { id: "theme", icon: Moon, label: "Thème", value: preferences.theme, options: [{v:"dark", l:"Sombre"},{v:"light", l:"Clair"},{v:"auto", l:"Automatique"}] },
-      ]
-    },
+    // Bloc "Affichage" (langue / devise / thème) retiré pour la v1.0 :
+    // l'app est française, en euros, et avec un thème sombre signature.
+    // Les options multi-langues et thème clair sont prévues pour une v1.1
+    // future. En attendant on évite l'illusion de fonctionnalités.
     {
       title: "Notifications", items: [
         { id: "notif_rides", icon: Bell, label: "Rappel de courses", type: "toggle", value: preferences.notifRides },
