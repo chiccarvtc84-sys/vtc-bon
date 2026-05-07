@@ -2244,6 +2244,12 @@ function PurchaseModal({ open, onClose, onConfirm }) {
       setStep("success");
     } catch (err) {
       setLoading(false);
+      // Si le caller a déjà affiché son propre dialogue (mode invité par
+      // exemple : on lui propose la création de compte), on n'affiche pas
+      // un alert redondant. Convention : message commençant par "Compte requis".
+      if (err?.message?.includes("Compte requis")) {
+        return;
+      }
       alert(`Paiement impossible : ${err?.message || err}`);
     }
   };
@@ -5363,11 +5369,28 @@ export default function App() {
   };
 
   const onPurchaseConfirm = async (purchase) => {
-    // Mode invité : pas de Supabase, on simule l'achat en mémoire.
+    // Sécurité (audit 2026-05-06) : en mode invité, NE PAS créditer
+    // automatiquement. Avant ce fix, cliquer sur "Payer" crédite le compte
+    // sans aucun paiement réel — trompeur (UI dit "Payer X €") et risque
+    // rejet App Store règle 2.3.1 (UI/fonctionnalité non conforme à ce
+    // qu'elle prétend). On force la création de compte avant tout achat.
     if (isGuest || !currentUser?.id) {
-      setTokenBalance(t => t + purchase.tokens);
-      setTokenHistory(prev => [purchase, ...prev]);
-      return purchase;
+      setPurchaseOpen(false); // ferme la modale d'achat
+      const wantsSignup = window.confirm(
+        "🔒 Achat de crédits réservé aux comptes inscrits\n\n" +
+        "Pour acheter des crédits, vous devez créer un compte gratuit.\n\n" +
+        "Avantages d'un compte :\n" +
+        "  • Vos données sont sauvegardées dans le cloud\n" +
+        "  • Vos factures sont conservées 10 ans (CGI)\n" +
+        "  • Vous recevez 5 crédits offerts à l'inscription\n" +
+        "  • Vous bénéficiez du bonus mensuel +1 crédit\n\n" +
+        "Créer un compte maintenant ?"
+      );
+      if (wantsSignup) {
+        onPromptSignup();
+      }
+      // On ne crédite PAS, on ne lance pas de Stripe.
+      throw new Error("Compte requis pour acheter des crédits");
     }
 
     // Mode connecté : redirection vers Stripe Checkout.
