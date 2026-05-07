@@ -560,7 +560,11 @@ const GlobalStyles = () => (
       width: 100%; background: var(--surface);
       border-top-left-radius: 24px; border-top-right-radius: 24px;
       border: 1px solid var(--border); border-bottom: none;
-      max-height: 90vh; overflow-y: auto;
+      /* max-height 88vh : laisse de la marge en haut pour qu'on voie qu'il
+         y a un overlay derrière. padding-bottom safe-area : empêche le bouton
+         "Payer" / "Continuer" d'être recouvert par le home indicator iPhone. */
+      max-height: 88vh; overflow-y: auto;
+      padding-bottom: max(16px, env(safe-area-inset-bottom));
       animation: tp-slide-up 0.3s cubic-bezier(0.22, 1, 0.36, 1);
     }
     @keyframes tp-slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
@@ -604,7 +608,11 @@ const GlobalStyles = () => (
    ------------------------------------------------------------------------- */
 function TopBar({ title, subtitle, onBack, rightAction }) {
   return (
-    <div style={{ padding: "20px 20px 12px", display: "flex", alignItems: "center", gap: 12 }}>
+    // Padding-top minimal : la TopBar est posée juste sous la status bar
+    // iOS (gérée par tp-scroll padding-top: env(safe-area-inset-top)).
+    // 6px de marge interne suffit pour aérer le titre sans laisser un
+    // gros vide entre l'heure/batterie et le contenu.
+    <div style={{ padding: "6px 20px 10px", display: "flex", alignItems: "center", gap: 12 }}>
       {onBack && (
         <button onClick={onBack} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }}>
           <ChevronLeft size={18} />
@@ -651,7 +659,7 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
 
   return (
     <div className="tp-scroll tp-no-scroll tp-fade-in" style={{ display: "flex", flexDirection: "column" }}>
-      <div style={{ padding: "28px 20px 8px" }}>
+      <div style={{ padding: "10px 20px 4px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
           <div>
             <div style={{ fontSize: 12, color: "var(--text-dim)", fontWeight: 500 }}>
@@ -686,7 +694,7 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
       </div>
 
       {/* ─── Stats du mois — vue rapide pour déclaration URSSAF/TVA ─── */}
-      <div style={{ padding: "18px 20px 0" }}>
+      <div style={{ padding: "12px 20px 0" }}>
         <button onClick={onQuickVoice} className="tp-card-elevated" style={{
           width: "100%", padding: 20, display: "flex", alignItems: "center", gap: 14,
           cursor: "pointer", textAlign: "left", border: "1px solid var(--accent-ring)",
@@ -705,7 +713,7 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
         </button>
       </div>
 
-      <div style={{ padding: "18px 20px 0", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+      <div style={{ padding: "12px 20px 0", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
         {[
           { icon: Plus, label: "Manuel", onClick: onNewBooking },
           { icon: Car, label: "Courses", onClick: () => onGoTab("bookings") },
@@ -719,8 +727,8 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
         ))}
       </div>
 
-      <div style={{ padding: "24px 20px 0" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+      <div style={{ padding: "16px 20px 0" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600 }}>Prochaines courses</div>
           <button onClick={() => onGoTab("bookings")} style={{ fontSize: 12, color: "var(--accent)", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
             Tout voir <ArrowUpRight size={12}/>
@@ -731,12 +739,11 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
         </div>
       </div>
 
-      {/* marginTop: auto → la carte Conformité est poussée tout en bas
-          de la zone visible (juste au-dessus de la BottomNav). Combiné au
-          display:flex column du wrapper, ça fait un layout type "header +
-          contenu + footer" qui comble naturellement l'espace vide en bas
-          des grands iPhone (Pro Max, 16+) — plus aucune bande noire/blanche. */}
-      <div style={{ padding: "20px 20px 12px", marginTop: "auto" }}>
+      {/* Carte Conformité en flux normal (sans marginTop:auto) — elle suit
+          immédiatement la liste des courses au lieu d'être collée à la
+          BottomNav. Le layout est ainsi compact, sans énorme vide vertical
+          au milieu sur les iPhone Pro Max. */}
+      <div style={{ padding: "14px 20px 0" }}>
         <div className="tp-card" style={{ padding: 16, display: "flex", gap: 14, alignItems: "center", background: "linear-gradient(135deg, rgba(16,185,129,0.10), rgba(16,185,129,0.02))", border: "1px solid rgba(16,185,129,0.25)" }}>
           <div style={{ width: 42, height: 42, borderRadius: 12, background: "var(--success-soft)", color: "var(--success)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <Shield size={20}/>

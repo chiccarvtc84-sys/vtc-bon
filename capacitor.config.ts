@@ -6,11 +6,12 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   bundledWebRuntime: false,
   ios: {
-    contentInset: 'always',
-    // Fond du WKWebView : par défaut iOS l'affiche en BLANC, ce qui crée
-    // une bande blanche dans la safe-area du home indicator quand le
-    // contenu CSS ne couvre pas exactement 100dvh. On force le noir profond
-    // (charte TrajetPro) pour que la zone soit toujours invisible.
+    // contentInset 'never' : le WebView s'étend SOUS la status bar
+    // (heure/batterie) au lieu d'être inseté. Ainsi le gradient sombre
+    // de l'app remonte jusqu'aux pixels du haut de l'écran → continuité
+    // visuelle parfaite, plus de "bande noire" au-dessus du contenu.
+    // Le CSS gère le décalage des textes via env(safe-area-inset-top).
+    contentInset: 'never',
     backgroundColor: '#0B0B0D',
   },
   android: {
