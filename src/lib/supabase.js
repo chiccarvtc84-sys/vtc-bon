@@ -445,6 +445,18 @@ export async function markSiretVerified(userId) {
   return data === true;
 }
 
+/**
+ * Marque la carte VTC de l'utilisateur connecté comme vérifiée.
+ * Appelé après saisie d'un n° de carte pro non vide. Pas d'API publique
+ * pour vérifier la carte en temps réel — on stocke la déclaration
+ * du chauffeur (sa responsabilité légale s'il fournit un faux numéro).
+ */
+export async function markEvtcVerified(userId) {
+  const { data, error } = await supabase.rpc('mark_evtc_verified', { p_user_id: userId });
+  if (error) throw new Error(`mark_evtc_verified RPC échouée : ${error.message}`);
+  return data === true;
+}
+
 // ----------------------------------------------------------------------------
 // Bons de course (bookings)
 // ----------------------------------------------------------------------------

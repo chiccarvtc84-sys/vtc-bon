@@ -40,6 +40,7 @@ import {
   markInvoiceUnpaid as sbMarkInvoiceUnpaid,
   verifySiret as sbVerifySiret,
   markSiretVerified as sbMarkSiretVerified,
+  markEvtcVerified as sbMarkEvtcVerified,
   isDisposableEmail as sbIsDisposableEmail,
   deleteMyAccount as sbDeleteMyAccount,
   signInWithApple as sbSignInWithApple,
@@ -3143,7 +3144,20 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
           await sbMarkSiretVerified(currentUser.id);
         } catch (e) {
           console.warn('[EditProfile] mark_siret_verified failed:', e?.message);
-          // Pas bloquant : la sauvegarde principale a déjà réussi.
+        }
+      }
+
+      // 1ter. Carte VTC : marque comme vérifiée dès qu'un n° de carte
+      //       pro est renseigné (peu importe le format — la déclaration
+      //       du chauffeur engage sa responsabilité). Le bandeau de
+      //       sécurité en haut du Profil affiche immédiatement la pastille
+      //       verte "Carte VTC vérifiée".
+      const proCardClean = form.proCardNumber.trim();
+      if (proCardClean && !currentUser.vtcLicenseVerified) {
+        try {
+          await sbMarkEvtcVerified(currentUser.id);
+        } catch (e) {
+          console.warn('[EditProfile] mark_evtc_verified failed:', e?.message);
         }
       }
 
