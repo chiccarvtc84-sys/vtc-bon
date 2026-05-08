@@ -690,7 +690,7 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
       display: "flex",
       flexDirection: "column",
       overflow: "hidden",                       // bloque le scroll global du screen
-      paddingTop: "env(safe-area-inset-top)",   // sous la status bar iPhone
+      paddingTop: "calc(env(safe-area-inset-top) + 14px)",   // sous la status bar iPhone
       minHeight: 0,
     }}>
       {/* ─── HEADER FIXE ─────────────────────────────────────────── */}
@@ -1817,7 +1817,7 @@ return (
       display: "flex",
       flexDirection: "column",
       overflow: "hidden",                       // bloque le scroll global du screen
-      paddingTop: "env(safe-area-inset-top)",   // sous la status bar iPhone
+      paddingTop: "calc(env(safe-area-inset-top) + 14px)",   // sous la status bar iPhone
       minHeight: 0,                             // permet à flex:1 de scroller à l'intérieur
     }}>
       {/* ─── HEADER FIXE ─────────────────────────────────────────── */}
@@ -1891,7 +1891,7 @@ function InvoicesScreen({ invoices, bookings, tokenBalance, onOpenInvoice, onGoT
       display: "flex",
       flexDirection: "column",
       overflow: "hidden",
-      paddingTop: "env(safe-area-inset-top)",
+      paddingTop: "calc(env(safe-area-inset-top) + 14px)",
       minHeight: 0,
     }}>
       {/* ─── HEADER FIXE ─────────────────────────────────────────── */}
@@ -4897,21 +4897,31 @@ export default function App() {
   }, []);
 
   // --- Préférence "Rappel de courses" : si désactivée → annule tout,
-  //     si réactivée → replanifie tout. Se déclenche aussi quand `bookings`
-  //     change après login pour synchroniser la 1re fois.
+  //     si réactivée → replanifie tout.
+  // 🐛 BUG fixé : `bookings.length` était absent du tableau de deps → l'effet
+  // ne se relançait jamais après le chargement des courses depuis Supabase
+  // → AUCUNE notification n'était programmée. Ajout de `bookings.length`
+  // dans les deps + demande de permission iOS au premier programme de notif
+  // (sinon le système rejette silencieusement le schedule).
   useEffect(() => {
     if (!isAuthenticated || isGuest) return;
     const upcoming = bookings.filter((b) => {
       const t = new Date(b.dateTime);
       return t.getTime() > Date.now() && b.status !== 'cancelled' && b.status !== 'completed';
     });
+    // Demande explicite de la permission notification quand on a quelque
+    // chose à programmer. Sans ça, iOS bloque silencieusement les schedule
+    // si l'utilisateur n'a jamais accepté la popup système au démarrage.
+    if (preferences.notifRides && upcoming.length > 0) {
+      ensureNotificationPermission().catch(() => {});
+    }
     rescheduleAllBookings(upcoming, {
       enabled: !!preferences.notifRides,
       selectedKeys: preferences.reminderOffsets,
     })
       .catch((e) => console.warn('reschedule on prefs change:', e?.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preferences.notifRides, preferences.reminderOffsets]);
+  }, [preferences.notifRides, preferences.reminderOffsets, bookings.length]);
 
   // --- Chargement des données utilisateur depuis Supabase ---
   // Appelé après login (ou au reload si la session existait déjà).

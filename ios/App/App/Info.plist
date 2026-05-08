@@ -30,18 +30,18 @@
 	<array>
 		<string>armv7</string>
 	</array>
+	<!-- Orientation verrouillée en PORTRAIT uniquement (iPhone + iPad).
+	     L'interface ne pivote jamais en paysage, même si l'utilisateur
+	     tourne son appareil. Décision UX : l'app est conçue pour être
+	     utilisée d'une main pendant la course, le paysage casse les
+	     proportions des cartes. -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
