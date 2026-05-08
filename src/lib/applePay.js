@@ -158,18 +158,23 @@ export async function payWithApplePay(packageId) {
     const result = await Stripe.presentApplePay();
     console.log('[applePay] presentApplePay result →', result);
 
-    // result.paymentResult vaut 'Completed' / 'Canceled' / 'Failed'
-    if (result?.paymentResult === 'Completed') {
+    // ⚠️ Plugin v7 : les valeurs sont 'applePayCompleted' / 'applePayCanceled'
+    // / 'applePayFailed' (nouvelle convention en lowerCamelCase préfixée).
+    // On normalise en lowercase + on reconnaît tous les patterns courants
+    // pour ne pas re-rater une variation de casse.
+    const raw = String(result?.paymentResult ?? '').toLowerCase();
+
+    if (raw.includes('completed') || raw.includes('success')) {
       return {
         ok: true,
         paymentIntentId: intent.paymentIntentId,
         tokens: intent.tokens,
       };
     }
-    if (result?.paymentResult === 'Canceled') {
+    if (raw.includes('cancel')) {
       return { ok: false, cancelled: true, reason: 'Paiement annulé.' };
     }
-    return { ok: false, reason: `Paiement échoué (${result?.paymentResult})` };
+    return { ok: false, reason: `Paiement échoué (${result?.paymentResult ?? 'inconnu'})` };
   } catch (err) {
     console.error('[applePay] EXCEPTION', err?.message, err);
     return { ok: false, reason: err?.message || 'Erreur Apple Pay (cf. logs Xcode)' };
