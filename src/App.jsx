@@ -682,7 +682,7 @@ function TokenBadge({ balance, onClick, compact = false }) {
 /* -------------------------------------------------------------------------
    HOME / DASHBOARD
    ------------------------------------------------------------------------- */
-function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, onQuickVoice, onNewBooking, onOpenBooking, onGoTab, onOpenPurchase, onPromptSignup }) {
+function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, onQuickVoice, onNewBooking, onOpenBooking, onGoTab, onOpenPurchase, onPromptSignup, setAgendaOpen }) {
   const today = new Date();
   const todayBookings = bookings.filter(b => new Date(b.dateTime).toDateString() === today.toDateString());
   const weekRevenue = invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.amount, 0);
@@ -762,7 +762,11 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
             { icon: Plus, label: "Manuel", onClick: onNewBooking },
             { icon: Car, label: "Courses", onClick: () => onGoTab("bookings") },
             { icon: Receipt, label: "Factures", onClick: () => onGoTab("invoices") },
-            { icon: Calendar, label: "Agenda", onClick: () => onGoTab("bookings") },
+            // "Agenda" ouvre une vue calendrier (modal) qui affiche le mois
+            // en cours avec un point sur chaque jour ayant au moins une
+            // course planifiée — utile pour voir d'un coup d'œil sa charge
+            // mensuelle, sans dupliquer la liste de "Courses".
+            { icon: Calendar, label: "Agenda", onClick: () => setAgendaOpen(true) },
           ].map((a, i) => (
             <button key={i} onClick={a.onClick} className="tp-card" style={{ padding: "12px 4px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer", background: "var(--surface)" }}>
               <a.icon size={20} style={{ color: "var(--accent)" }}/>
@@ -788,7 +792,29 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
           </button>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {bookings.slice(0, 20).map(b => <BookingCard key={b.id} booking={b} onClick={() => onOpenBooking(b)} />)}
+          {(() => {
+            // Affiche UNIQUEMENT les courses futures (date > maintenant) sur
+            // la page Accueil. Une course passée disparaît automatiquement
+            // d'ici, mais reste accessible via "Mes courses" (historique).
+            // Tri chronologique croissant : la prochaine course en premier.
+            const now = Date.now();
+            const upcoming = bookings
+              .filter(b => new Date(b.dateTime).getTime() > now)
+              .sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime))
+              .slice(0, 20);
+            if (upcoming.length === 0) {
+              return (
+                <div style={{ padding: 28, textAlign: "center", color: "var(--text-dim)", border: "1px dashed var(--border)", borderRadius: 14 }}>
+                  <Calendar size={28} style={{ opacity: 0.4, margin: "0 auto 8px" }}/>
+                  <div style={{ fontSize: 13 }}>Aucune course à venir</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                    Créez-en une via le bouton 🎙️ ou "Manuel"
+                  </div>
+                </div>
+              );
+            }
+            return upcoming.map(b => <BookingCard key={b.id} booking={b} onClick={() => onOpenBooking(b)} />);
+          })()}
         </div>
 
         {/* Carte Conformité en bas du scroll, après toutes les courses */}
@@ -4583,6 +4609,172 @@ function HelpScreen({ onBack }) {
 /* -------------------------------------------------------------------------
    MONTHLY BONUS TOAST
    ------------------------------------------------------------------------- */
+/* -------------------------------------------------------------------------
+   AGENDA MODAL — vue calendrier mensuel des courses
+   -------------------------------------------------------------------------
+   Modal affichée depuis l'Accueil → bouton "Agenda". Montre le mois en
+   cours sous forme de grille 7×N : chaque case = un jour ; les jours qui
+   ont au moins une course sont marqués d'un point doré + le nombre de
+   courses ce jour-là. Permet de naviguer aux mois précédent/suivant et
+   de tap sur un jour pour voir la liste des courses détaillée.
+   ------------------------------------------------------------------------- */
+function AgendaModal({ open, onClose, bookings, onOpenBooking }) {
+  const [cursor, setCursor] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [selectedDay, setSelectedDay] = useState(null);
+
+  if (!open) return null;
+
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+
+  // 1er jour du mois (0 = dim, 1 = lun…). En FR on commence par lundi.
+  // J'aligne donc l'offset : si jour US = 0 (dim) → on met 6, sinon on
+  // soustrait 1 (lun → 0, mar → 1…).
+  const firstDate = new Date(year, month, 1);
+  const usWeekday = firstDate.getDay();
+  const startOffset = (usWeekday + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  // Map { 'YYYY-MM-DD' : [bookings] } pour le mois affiché
+  const bookingsByDay = {};
+  bookings.forEach((b) => {
+    const dt = new Date(b.dateTime);
+    if (dt.getFullYear() !== year || dt.getMonth() !== month) return;
+    const key = `${year}-${String(month + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+    (bookingsByDay[key] = bookingsByDay[key] || []).push(b);
+  });
+
+  const todayKey = (() => {
+    const t = new Date();
+    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+  })();
+
+  const monthLabel = cursor.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+  const cells = [];
+  for (let i = 0; i < startOffset; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  // Compléter jusqu'à un multiple de 7 pour aligner la grille
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const monthBookingsCount = Object.values(bookingsByDay).reduce((s, arr) => s + arr.length, 0);
+
+  const goPrev = () => setCursor(new Date(year, month - 1, 1));
+  const goNext = () => setCursor(new Date(year, month + 1, 1));
+
+  const dayList = selectedDay ? bookingsByDay[selectedDay] || [] : [];
+
+  return (
+    <div className="tp-overlay" onClick={onClose}>
+      <div className="tp-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="tp-grab"/>
+        <div style={{ padding: "14px 20px 20px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+            <button onClick={goPrev} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }}>
+              <ChevronLeft size={18}/>
+            </button>
+            <div style={{ textAlign: "center" }}>
+              <div className="tp-serif" style={{ fontSize: 20, fontWeight: 600, textTransform: "capitalize" }}>{monthLabel}</div>
+              <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>
+                {monthBookingsCount} course{monthBookingsCount > 1 ? "s" : ""} ce mois-ci
+              </div>
+            </div>
+            <button onClick={() => setCursor(new Date(year, month + 1, 1))}
+              className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }}>
+              <ArrowUpRight size={18} style={{ transform: "rotate(45deg)" }}/>
+            </button>
+          </div>
+
+          {/* En-tête jours de la semaine */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginTop: 14 }}>
+            {["L", "M", "M", "J", "V", "S", "D"].map((w, i) => (
+              <div key={i} style={{ fontSize: 10, textAlign: "center", color: "var(--text-dim)", fontWeight: 700, padding: "4px 0" }}>{w}</div>
+            ))}
+          </div>
+
+          {/* Grille des jours */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginTop: 4 }}>
+            {cells.map((d, i) => {
+              if (d === null) return <div key={i}/>;
+              const key = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+              const dayCount = bookingsByDay[key]?.length || 0;
+              const isToday = key === todayKey;
+              const isSelected = key === selectedDay;
+              return (
+                <button key={i} onClick={() => setSelectedDay(isSelected ? null : key)}
+                  style={{
+                    aspectRatio: "1 / 1",
+                    background: isSelected
+                      ? "var(--accent)"
+                      : isToday ? "var(--accent-soft)" : "var(--surface)",
+                    border: "1px solid",
+                    borderColor: isSelected
+                      ? "var(--accent)"
+                      : isToday ? "var(--accent-ring)" : "var(--border)",
+                    borderRadius: 10,
+                    color: isSelected ? "#0B0B0D" : "var(--text)",
+                    cursor: dayCount > 0 ? "pointer" : "default",
+                    display: "flex", flexDirection: "column",
+                    alignItems: "center", justifyContent: "center",
+                    fontSize: 13, fontWeight: 600, gap: 2,
+                    transition: "all 0.15s",
+                  }}>
+                  <span>{d}</span>
+                  {dayCount > 0 && (
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      color: isSelected ? "#0B0B0D" : "var(--accent)",
+                      background: isSelected ? "rgba(11,11,13,0.15)" : "var(--accent-soft)",
+                      padding: "1px 6px",
+                      borderRadius: 999,
+                    }}>{dayCount}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Liste des courses du jour sélectionné */}
+          {selectedDay && (
+            <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+              <div className="tp-label" style={{ marginBottom: 8 }}>
+                {new Date(selectedDay).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}
+              </div>
+              {dayList.length === 0 ? (
+                <div style={{ fontSize: 13, color: "var(--text-dim)", textAlign: "center", padding: 12 }}>Aucune course ce jour</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {dayList
+                    .sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime))
+                    .map(b => (
+                      <button key={b.id}
+                        onClick={() => { onClose(); onOpenBooking(b); }}
+                        className="tp-card"
+                        style={{ padding: 12, display: "flex", gap: 12, alignItems: "center", textAlign: "left", cursor: "pointer", background: "var(--surface)" }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "var(--accent)", minWidth: 50 }}>
+                          {new Date(b.dateTime).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.customerName}</div>
+                          <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {b.pickupAddress} → {b.dropoffAddress}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MonthlyBonusToast({ open, onClose }) {
   useEffect(() => {
     if (!open) return;
@@ -4856,6 +5048,7 @@ export default function App() {
   const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [purchaseDetail, setPurchaseDetail] = useState(null);
   const [insufficientOpen, setInsufficientOpen] = useState(false);
+  const [agendaOpen, setAgendaOpen] = useState(false);
   const [pendingActionLabel, setPendingActionLabel] = useState("");
   const [monthlyBonusOpen, setMonthlyBonusOpen] = useState(false);
 
@@ -5808,7 +6001,8 @@ export default function App() {
           onQuickVoice={onOpenVoice} onNewBooking={onNewBooking}
           onOpenBooking={setDetailBooking} onGoTab={setTab}
           onOpenPurchase={() => setPurchaseOpen(true)}
-          onPromptSignup={onPromptSignup}/>;
+          onPromptSignup={onPromptSignup}
+          setAgendaOpen={setAgendaOpen}/>;
         break;
       case "bookings":
         screen = <BookingsScreen bookings={bookings} tokenBalance={tokenBalance}
@@ -5899,6 +6093,12 @@ export default function App() {
             currentBalance={tokenBalance}
           />
           <MonthlyBonusToast open={monthlyBonusOpen} onClose={() => setMonthlyBonusOpen(false)}/>
+          <AgendaModal
+            open={agendaOpen}
+            onClose={() => setAgendaOpen(false)}
+            bookings={bookings}
+            onOpenBooking={setDetailBooking}
+          />
         </div>
       </div>
     </>

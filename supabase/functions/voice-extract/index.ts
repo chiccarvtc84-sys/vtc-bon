@@ -266,7 +266,12 @@ Deno.serve(async (req: Request) => {
             // thinkingBudget: 0 désactive complètement le raisonnement interne
             // (réponse plus rapide + JSON jamais tronqué).
             thinkingConfig: { thinkingBudget: 0 },
-            maxOutputTokens: 2048,
+            // 🐛 BUG fixé : 2048 tokens étaient TROP PEU pour les dictées longues.
+            // Le `transcription_corrigee` peut faire 200-500 mots → JSON
+            // tronqué en plein milieu → parser plante → user voit du texte
+            // incomplet. 8192 = max supporté par Gemini 2.5 Flash, couvre
+            // toutes les dictées réalistes (≈ 6000 mots de sortie).
+            maxOutputTokens: 8192,
           },
         }),
         signal: controller.signal,
@@ -317,8 +322,24 @@ Deno.serve(async (req: Request) => {
       }, 500);
     }
 
-    // 7. Parse JSON robuste (Gemini en mode JSON strict est très propre,
-    //    mais filet de sécurité au cas où).
+    // 7a. Détecte si Gemini a tronqué la réponse à cause de la limite tokens.
+    //     Avant ce check, le JSON tronqué passait par safeParseJson et
+    //     plantait → message d'erreur générique "Réponse inattendue".
+    //     Maintenant on identifie clairement le cas pour aider à diagnostiquer.
+    const finishReason = firstCandidate?.finishReason;
+    if (finishReason === "MAX_TOKENS") {
+      console.error("[voice-extract] Réponse tronquée — MAX_TOKENS atteint", {
+        user_id: user.id,
+        transcription_len: transcription.length,
+        output_tokens: geminiResponse?.usageMetadata?.candidatesTokenCount,
+      });
+      return json({
+        error: "Dictée trop longue pour être traitée en une fois. Découpez en plusieurs courses plus courtes ou utilisez la saisie manuelle.",
+      }, 413);
+    }
+
+    // 7b. Parse JSON robuste (Gemini en mode JSON strict est très propre,
+    //     mais filet de sécurité au cas où).
     let parsed: unknown;
     try {
       parsed = safeParseJson(text);
