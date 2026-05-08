@@ -29,6 +29,12 @@ import { BiometricAuth, BiometryType } from '@aparajita/capacitor-biometric-auth
 import { isNativePlatform, preferencesGet, preferencesSet } from './platform.js';
 
 const PREF_KEY_ENABLED = 'biometric_enabled';
+// L'ID du user TrajetPro qui a activé la biométrie sur cet appareil.
+// On le stocke pour empêcher la reconnexion automatique vers un AUTRE
+// compte (ex : utilisateur qui se déconnecte puis fait Sign-in with Apple
+// avec un Apple ID différent → on doit bloquer la nouvelle session car
+// l'appareil est verrouillé pour le compte d'origine).
+const PREF_KEY_USER_ID = 'biometric_user_id';
 
 /**
  * Vrai si l'appareil supporte la biométrie ET qu'au moins une empreinte
@@ -75,16 +81,21 @@ export async function isBiometricEnabled() {
 }
 
 /**
- * Active la biométrie : déclenche un prompt système pour vérifier que
- * l'utilisateur a bien Face ID / Touch ID configuré et fonctionnel.
- * Si l'utilisateur valide → on persiste le flag `biometric_enabled=true`.
- * Si refus / annulation → on retourne false sans rien stocker.
+ * Active la biométrie ET la lie à un user TrajetPro spécifique.
+ *
+ * @param {string} userId — UUID du user TrajetPro actuellement connecté.
+ *   Stocké dans Capacitor Preferences pour qu'au prochain login, on
+ *   puisse vérifier que c'est BIEN le même compte qui revient (et pas
+ *   un autre Apple ID via iCloud Keychain ou un compte email différent).
  *
  * @returns {Promise<{ ok: boolean, reason?: string }>}
  */
-export async function enableBiometric() {
+export async function enableBiometric(userId) {
   if (!isNativePlatform()) {
     return { ok: false, reason: 'La biométrie n\'est disponible que sur iPhone et Android.' };
+  }
+  if (!userId) {
+    return { ok: false, reason: 'Activation impossible : aucun utilisateur connecté.' };
   }
   const available = await isBiometricAvailable();
   if (!available) {
@@ -104,6 +115,7 @@ export async function enableBiometric() {
       androidConfirmationRequired: false,
     });
     await preferencesSet(PREF_KEY_ENABLED, 'true');
+    await preferencesSet(PREF_KEY_USER_ID, String(userId));
     return { ok: true };
   } catch (err) {
     return {
@@ -114,10 +126,26 @@ export async function enableBiometric() {
 }
 
 /**
- * Désactive la biométrie : pas de prompt, juste on efface le flag.
+ * Désactive la biométrie ET supprime le binding au user. Appeler ça
+ * quand l'utilisateur désactive l'option dans les Préférences OU quand
+ * il supprime son compte. Ne PAS l'appeler sur un simple logout volontaire :
+ * on veut que Face ID continue à reconnaître le compte au prochain login.
  */
 export async function disableBiometric() {
   await preferencesSet(PREF_KEY_ENABLED, 'false');
+  await preferencesSet(PREF_KEY_USER_ID, '');
+}
+
+/**
+ * Renvoie le UUID du user lié à la biométrie sur cet appareil, ou null
+ * si la biométrie n'est pas activée. Utilisé au login pour vérifier que
+ * le user qui revient est bien celui qui avait activé Face ID.
+ */
+export async function getBiometricUserId() {
+  const enabled = await isBiometricEnabled();
+  if (!enabled) return null;
+  const v = await preferencesGet(PREF_KEY_USER_ID);
+  return v || null;
 }
 
 /**

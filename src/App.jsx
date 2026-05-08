@@ -51,11 +51,13 @@ import {
   enableBiometric,
   disableBiometric,
   verifyBiometric,
+  getBiometricUserId,
   getBiometryLabel,
 } from './lib/biometric.js';
 import { buildInvoicePdf, downloadInvoicePdf } from './lib/invoicePdf.js';
 import { shareGeneric, sharePdf, openMailto, openSms, downloadIcs } from './lib/shareHelpers.js';
 import { exportInvoicesCsv, exportBookingsCsv } from './lib/csvExport.js';
+import { useEdgeSwipeBack } from './lib/useEdgeSwipeBack.js';
 import { parseVoiceCommand as parseVoiceCommandV2 } from './lib/voiceParser.js';
 import {
   ensureNotificationPermission,
@@ -628,6 +630,12 @@ const GlobalStyles = () => (
    TOP BAR & TOKEN BADGE
    ------------------------------------------------------------------------- */
 function TopBar({ title, subtitle, onBack, rightAction }) {
+  // Geste de swipe depuis le bord gauche → équivalent du bouton retour.
+  // Activé seulement quand onBack est fourni (donc seulement sur les écrans
+  // qui ont un retour visible — les écrans racines comme Accueil n'ont pas
+  // de retour et ce geste reste désactivé pour ne pas perturber le scroll).
+  useEdgeSwipeBack(onBack, !!onBack);
+
   return (
     // Padding-top minimal : la TopBar est posée juste sous la status bar
     // iOS (gérée par tp-scroll padding-top: env(safe-area-inset-top)).
@@ -4986,6 +4994,26 @@ export default function App() {
         .single();
       const finalProfile = profileFromDb(refreshed || profileRow);
 
+      // ─── Verrou biométrie : empêcher la connexion d'un AUTRE compte ──
+      // Si la biométrie a été activée pour un user spécifique sur cet
+      // appareil, on refuse toute autre session. Cas typique : l'utilisateur
+      // a activé Face ID sur le compte A, se déconnecte, et redéclenche
+      // Sign-in with Apple. Apple/iCloud peut suggérer un autre Apple ID
+      // (compte B) → ici on bloque et on force un sign-out + message clair.
+      const lockedUserId = await getBiometricUserId();
+      if (lockedUserId && lockedUserId !== finalProfile.id) {
+        alert(
+          'Cet appareil est verrouillé par Face ID pour un autre compte ' +
+          'TrajetPro.\n\nDeux options :\n' +
+          '• Vous reconnecter au compte d\'origine.\n' +
+          '• OU désactiver Face ID dans Profil → Préférences → Biométrie ' +
+          'depuis ce compte d\'origine.'
+        );
+        await supabase.auth.signOut();
+        setDataLoading(false);
+        return false;
+      }
+
       // Bookings + Invoices + Token transactions en parallèle
       const [bookingRows, invoiceRows, tokenRows] = await Promise.all([
         sbLoadBookings(authUserId).catch(() => []),
@@ -5608,8 +5636,16 @@ export default function App() {
     // dans l'objet `preferences` côté React, qui est en mémoire seulement).
     if (key === 'bio') {
       if (value) {
-        // L'utilisateur veut activer : on prompt Face ID pour confirmer
-        const result = await enableBiometric();
+        // L'utilisateur veut activer : on prompt Face ID + on lie le user_id
+        // courant à la biométrie. Sans cela, la prochaine connexion via
+        // Sign-in with Apple pourrait restaurer un AUTRE compte (ex : iCloud
+        // Keychain qui propose un Apple ID différent) et l'app serait
+        // déverrouillée pour le mauvais user.
+        if (!currentUser?.id) {
+          alert('Connectez-vous d\'abord avant d\'activer la biométrie.');
+          return;
+        }
+        const result = await enableBiometric(currentUser.id);
         if (!result.ok) {
           alert(result.reason || 'Activation de la biométrie échouée.');
           return;
