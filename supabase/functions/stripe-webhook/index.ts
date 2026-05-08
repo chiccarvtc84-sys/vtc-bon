@@ -70,6 +70,18 @@ Deno.serve(async (req: Request) => {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
       await handleCheckoutCompleted(stripe, supabase, session);
+    } else if (event.type === "payment_intent.succeeded") {
+      // Flow Apple Pay natif : pas de Checkout Session, on traite l'intent direct.
+      // ⚠️ Pour éviter le double-crédit, on ne traite QUE les intents marqués
+      // `flow === 'native_apple_pay'` dans leurs métadonnées. Les intents
+      // créés par un Checkout Session classique sont traités par le handler
+      // `checkout.session.completed` ci-dessus (Stripe envoie les 2 events).
+      const intent = event.data.object as Stripe.PaymentIntent;
+      if (intent.metadata?.flow === "native_apple_pay") {
+        await handlePaymentIntentSucceeded(supabase, intent);
+      } else {
+        console.log(`PaymentIntent ${intent.id} ignoré (flow=${intent.metadata?.flow || 'checkout'})`);
+      }
     } else if (event.type === "payment_intent.payment_failed") {
       const intent = event.data.object as Stripe.PaymentIntent;
       console.warn(`Paiement échoué : ${intent.id}`, intent.last_payment_error);
@@ -215,6 +227,115 @@ async function handleCheckoutCompleted(
 
   console.log(
     `✅ Crédit ${tokens} tokens pour user ${userId} (facture ${invoiceNumber}, intent ${intentId})`,
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Traitement d'un PaymentIntent réussi (flow Apple Pay natif)
+// ----------------------------------------------------------------------------
+// Identique à handleCheckoutCompleted mais lit les métadonnées et le montant
+// directement depuis le PaymentIntent (pas de Checkout Session enveloppante).
+// Le payment_method est marqué "apple_pay" car ce handler est exclusivement
+// déclenché par les flows initiés depuis l'app native (où la sheet Apple Pay
+// est l'unique méthode de paiement).
+async function handlePaymentIntentSucceeded(
+  supabase: ReturnType<typeof createClient>,
+  intent: Stripe.PaymentIntent,
+) {
+  const meta = intent.metadata ?? {};
+  const userId = meta.user_id;
+  const packageId = meta.package_id;
+  const tokens = parseInt(meta.tokens || "0", 10);
+  const packLabel = meta.pack_label || packageId;
+
+  if (!userId || !packageId || !tokens) {
+    throw new Error("Métadonnées PaymentIntent manquantes");
+  }
+
+  const amountTtc = (intent.amount_received ?? intent.amount ?? 0) / 100;
+
+  // 1. Crédit des tokens via RPC (idempotent grâce à stripe_payment_intent_id)
+  const { data: credited, error: creditError } = await supabase.rpc(
+    "credit_token_purchase",
+    {
+      p_user_id: userId,
+      p_tokens: tokens,
+      p_amount_ttc: amountTtc,
+      p_package_id: packageId,
+      p_stripe_intent_id: intent.id,
+    },
+  );
+  if (creditError) {
+    throw new Error(`RPC credit_token_purchase échouée : ${creditError.message}`);
+  }
+  if (credited !== true) {
+    console.log(`Intent ${intent.id} déjà crédité — événement ignoré`);
+    return;
+  }
+
+  // 2. Génération de la facture (numérotation chronologique)
+  const year = new Date().getUTCFullYear();
+  const { data: lastInvoice } = await supabase
+    .from("invoices")
+    .select("invoice_number")
+    .like("invoice_number", `TRP-${year}-%`)
+    .order("invoice_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  let nextNum = 1;
+  if (lastInvoice?.invoice_number) {
+    const match = lastInvoice.invoice_number.match(/-(\d+)$/);
+    if (match) nextNum = parseInt(match[1], 10) + 1;
+  }
+  const invoiceNumber = `TRP-${year}-${String(nextNum).padStart(4, "0")}`;
+
+  const vatRate = 20;
+  const amountHt = +(amountTtc / (1 + vatRate / 100)).toFixed(2);
+  const amountVat = +(amountTtc - amountHt).toFixed(2);
+
+  const fingerprintRaw = [
+    invoiceNumber, userId, packageId,
+    String(amountTtc), intent.id, new Date().toISOString(),
+  ].join("|");
+  const fingerprint = await sha256(fingerprintRaw);
+
+  // L'email du PaymentIntent vient de receipt_email (positionné à la création)
+  const customerEmail = intent.receipt_email || null;
+
+  const { error: invoiceError } = await supabase.from("invoices").insert({
+    user_id: userId,
+    booking_id: null,
+    invoice_number: invoiceNumber,
+    customer_name: packLabel,
+    customer_email: customerEmail,
+    amount_ht: amountHt,
+    amount_vat: amountVat,
+    amount_ttc: amountTtc,
+    vat_rate: vatRate,
+    vat_reverse_charge: false,
+    status: "paid",
+    payment_method: "apple_pay",
+    fingerprint,
+    fingerprint_algorithm: "sha256",
+    qr_code_data:
+      `INV:${invoiceNumber}|TTC:${amountTtc}|VAT:${vatRate}|FP:${fingerprint.slice(0, 16)}`,
+    paid_at: new Date().toISOString(),
+  });
+  if (invoiceError) {
+    console.error(
+      `⚠️ Facture non créée pour intent ${intent.id} : ${invoiceError.message}`,
+    );
+  }
+
+  // 3. Backfill du numéro de facture sur la transaction
+  await supabase
+    .from("token_transactions")
+    .update({ invoice_number: invoiceNumber })
+    .eq("stripe_payment_intent_id", intent.id);
+
+  console.log(
+    `✅ [Apple Pay natif] Crédit ${tokens} tokens pour user ${userId} (facture ${invoiceNumber}, intent ${intent.id})`,
   );
 }
 

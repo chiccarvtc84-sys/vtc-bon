@@ -18,6 +18,7 @@ def capacitor_pods
   pod 'CapacitorPreferences', :path => '../../node_modules/@capacitor/preferences'
   pod 'CapacitorCommunityAppleSignIn', :path => '../../node_modules/@capacitor-community/apple-sign-in'
   pod 'CapacitorFilesystem', :path => '../../node_modules/@capacitor/filesystem'
+  pod 'CapacitorCommunityStripe', :path => '../../node_modules/@capacitor-community/stripe'
 end
 
 target 'App' do

@@ -58,6 +58,7 @@ import { buildInvoicePdf, downloadInvoicePdf } from './lib/invoicePdf.js';
 import { shareGeneric, sharePdf, openMailto, openSms, downloadIcs } from './lib/shareHelpers.js';
 import { exportInvoicesCsv, exportBookingsCsv } from './lib/csvExport.js';
 import { useEdgeSwipeBack } from './lib/useEdgeSwipeBack.js';
+import { payWithApplePay } from './lib/applePay.js';
 import { parseVoiceCommand as parseVoiceCommandV2 } from './lib/voiceParser.js';
 import {
   ensureNotificationPermission,
@@ -5564,20 +5565,47 @@ export default function App() {
       throw new Error("Compte requis pour acheter des crédits");
     }
 
-    // Mode connecté : redirection vers Stripe Checkout.
-    // Le webhook stripe-webhook reçoit checkout.session.completed → crédite
-    // les tokens et génère la facture. Au retour sur l'app (success_url),
-    // le useEffect ci-dessous détecte ?purchase=success et rafraîchit les tokens.
     const packageId = purchase.packageId || purchase.package_id;
     if (!packageId) throw new Error("Pack inconnu (packageId manquant)");
 
+    // ─── FLOW APPLE PAY NATIF (iOS uniquement) ────────────────────────
+    // Si on est sur iPhone Capacitor ET que l'utilisateur a choisi Apple
+    // Pay comme méthode de paiement, on lance la sheet PassKit native.
+    // Avantage : 1 tap + Face ID, zéro page web Stripe Checkout.
+    // Le webhook stripe-webhook reçoit `payment_intent.succeeded` (avec
+    // metadata.flow = 'native_apple_pay') → crédite + facture.
+    const wantApplePay = (purchase.paymentMethod === "Apple Pay");
+    if (wantApplePay && isNativePlatform()) {
+      const result = await payWithApplePay(packageId);
+      if (result.cancelled) {
+        // L'utilisateur a annulé la sheet Apple Pay → on remonte une erreur
+        // muette pour que la modale d'achat reste ouverte sans alert.
+        throw new Error("Compte requis"); // déclenche le silence côté caller
+      }
+      if (result.notAvailable) {
+        // Pas de carte dans Wallet, ou Apple Pay désactivé → on bascule
+        // vers le flow Checkout web classique pour éviter de bloquer l'achat.
+        const { url } = await createCheckoutSession(packageId);
+        if (!url) throw new Error("URL Stripe manquante");
+        window.location.assign(url);
+        return new Promise(() => {});
+      }
+      if (!result.ok) {
+        throw new Error(result.reason || "Apple Pay échoué");
+      }
+      // Succès : le webhook va créditer les tokens en async (~1-2s).
+      // On rafraîchit le solde après un court délai.
+      setTimeout(() => { refreshTokens().catch(() => {}); }, 1500);
+      return purchase;
+    }
+
+    // ─── FLOW STRIPE CHECKOUT WEB (carte / fallback web / Android) ────
+    // Redirection externe vers la page Stripe hostée. Le webhook reçoit
+    // checkout.session.completed → crédite + facture. Au retour sur
+    // success_url, le useEffect détecte ?purchase=success et rafraîchit.
     const { url } = await createCheckoutSession(packageId);
     if (!url) throw new Error("URL Stripe manquante");
-
-    // Redirection — la suite du code ne s'exécute pas (le navigateur quitte la page).
     window.location.assign(url);
-    // Promise non résolue : Stripe Checkout est ouvert, l'app va revenir via
-    // success_url ou cancel_url. On laisse le loading actif sur la modale.
     return new Promise(() => { /* never resolves */ });
   };
 

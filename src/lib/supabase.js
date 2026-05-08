@@ -687,6 +687,48 @@ export async function createCheckoutSession(packageId) {
 }
 
 /**
+ * Crée un Stripe PaymentIntent pour le flow Apple Pay natif.
+ *
+ * Différent de createCheckoutSession : on ne renvoie PAS d'URL Stripe à
+ * ouvrir, mais un `clientSecret` qu'on passe directement au plugin
+ * @capacitor-community/stripe pour déclencher la sheet Apple Pay native
+ * (pas de redirection web → 1 clic au lieu de 3).
+ *
+ * @param {string} packageId — pack20 / pack40 / pack50 / pack80
+ * @returns {Promise<{
+ *   paymentIntentId: string,
+ *   clientSecret: string,
+ *   amountCents: number,
+ *   label: string,
+ *   tokens: number,
+ * }>}
+ */
+export async function createPaymentIntent(packageId) {
+  const { data, error } = await supabase.functions.invoke('create-payment-intent', {
+    body: { packageId },
+  });
+
+  if (error) {
+    let detail = error?.message || 'Erreur création paiement';
+    try {
+      if (error?.context && typeof error.context.json === 'function') {
+        const errorBody = await error.context.json();
+        if (errorBody?.error) detail = errorBody.error;
+      }
+    } catch { /* fallback à error.message */ }
+    console.error('[createPaymentIntent] Edge function error:', {
+      status: error?.context?.status,
+      detail,
+    });
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+  }
+  if (!data?.clientSecret) {
+    throw new Error("Réponse Stripe invalide (pas de clientSecret)");
+  }
+  return data;
+}
+
+/**
  * Récupère une transaction d'achat à partir d'un session_id Stripe Checkout.
  * Utilisé sur la page de retour pour vérifier que le webhook a bien crédité.
  */
