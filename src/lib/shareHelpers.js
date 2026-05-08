@@ -67,10 +67,47 @@ export async function shareGeneric({ title, text, url, dialogTitle }) {
  * @param {{ title?: string, text?: string }} meta
  */
 export async function sharePdf(pdfBlob, filename, meta = {}) {
-  // Sur natif Capacitor, on doit d'abord écrire le fichier dans un
-  // emplacement accessible puis passer le path à Share. Pour simplifier
-  // (et éviter la dép supplémentaire @capacitor/filesystem), on retombe
-  // sur Web Share API avec l'objet File quand possible.
+  // ─── Branche NATIVE iOS / Android (Capacitor) ────────────────────────
+  // Le pattern recommandé : écrire le PDF dans le cache via Filesystem,
+  // puis passer le path file:// au plugin Share. WKWebView bloque les
+  // <a download> et n'expose pas navigator.share avec File → ce flow est
+  // le SEUL qui marche réellement sur device pour partager un fichier.
+  if (isNativePlatform()) {
+    try {
+      const base64Data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result || '');
+          resolve((result.split(',')[1]) || '');
+        };
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(pdfBlob);
+      });
+
+      const { Filesystem, Directory } = await import('@capacitor/filesystem');
+
+      const writeResult = await Filesystem.writeFile({
+        path: filename,
+        data: base64Data,
+        directory: Directory.Cache,
+        recursive: true,
+      });
+
+      await Share.share({
+        title: meta.title,
+        text: meta.text,
+        url: writeResult.uri,
+        dialogTitle: 'Partager la facture',
+      });
+      return { ok: true };
+    } catch (err) {
+      if (err?.message?.toLowerCase().includes('cancel')) return { ok: true };
+      return { ok: false, reason: err?.message || 'Partage annulé.' };
+    }
+  }
+
+  // ─── Branche WEB ─────────────────────────────────────────────────────
+  // Web Share API avec File si dispo, sinon fallback download <a>.
   const file = new File([pdfBlob], filename, { type: 'application/pdf' });
 
   if (typeof navigator !== 'undefined' &&
@@ -89,7 +126,7 @@ export async function sharePdf(pdfBlob, filename, meta = {}) {
     }
   }
 
-  // Fallback : déclenche un download
+  // Fallback final : déclenche un download <a>
   const url = URL.createObjectURL(pdfBlob);
   const a = document.createElement('a');
   a.href = url;

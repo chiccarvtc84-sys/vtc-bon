@@ -679,7 +679,7 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
   const weekRevenue = invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.amount, 0);
 
   return (
-    <div className="tp-scroll tp-no-scroll tp-fade-in" style={{ display: "flex", flexDirection: "column" }}>
+    <div className="tp-scroll tp-fade-in" style={{ display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "10px 20px 4px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
           <div>
@@ -756,7 +756,11 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
           </button>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {bookings.slice(0, 3).map(b => <BookingCard key={b.id} booking={b} onClick={() => onOpenBooking(b)} />)}
+          {/* Affiche les 6 prochaines courses ; au-delà l'utilisateur clique
+              "Tout voir" pour ouvrir l'écran "Mes courses" complet. La page
+              Accueil est désormais scrollable verticalement → on peut faire
+              défiler pour atteindre la fin de la liste. */}
+          {bookings.slice(0, 6).map(b => <BookingCard key={b.id} booking={b} onClick={() => onOpenBooking(b)} />)}
         </div>
       </div>
 

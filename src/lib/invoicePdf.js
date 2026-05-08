@@ -486,12 +486,70 @@ export async function buildInvoicePdf(invoice, booking, profile, settings = {}) 
 /**
  * Déclenche un téléchargement client-side du PDF (web).
  */
+/**
+ * Télécharge le PDF d'une facture.
+ *
+ * - Web : crée un Blob URL + lien <a download> qui déclenche le téléchargement
+ *   classique du navigateur.
+ * - iOS / Android (Capacitor natif) : <a download> est BLOQUÉ par WKWebView.
+ *   On écrit donc le PDF dans le dossier cache de l'app via @capacitor/filesystem
+ *   puis on ouvre la feuille de partage iOS via @capacitor/share avec le path
+ *   `file://...` du PDF — l'utilisateur peut alors "Enregistrer dans Fichiers",
+ *   AirDrop, l'envoyer par mail, etc. C'est le pattern standard pour
+ *   "télécharger" un fichier dans une app native iOS.
+ */
 export async function downloadInvoicePdf(invoice, booking, profile, settings) {
   const blob = await buildInvoicePdf(invoice, booking, profile, settings);
+  const filename = `${invoice.number || invoice.invoice_number || 'facture'}.pdf`;
+
+  // Détection plateforme dynamique (n'impacte pas le bundle web).
+  let isNative = false;
+  try {
+    const { Capacitor } = await import('@capacitor/core');
+    isNative = Capacitor.isNativePlatform();
+  } catch { /* env web pur */ }
+
+  if (isNative) {
+    // 1. Convertir le blob en base64 pour l'API Filesystem
+    const base64Data = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || '');
+        // result est "data:application/pdf;base64,XXXX..." → on garde seulement XXXX
+        const base64 = result.split(',')[1] || '';
+        resolve(base64);
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+
+    const { Filesystem, Directory } = await import('@capacitor/filesystem');
+    const { Share } = await import('@capacitor/share');
+
+    // 2. Écrire le fichier dans le dossier cache de l'app.
+    // Cache plutôt que Documents : auto-purgé par iOS si stockage faible,
+    // pas de besoin de Backup iCloud pour un PDF de partage temporaire.
+    const writeResult = await Filesystem.writeFile({
+      path: filename,
+      data: base64Data,
+      directory: Directory.Cache,
+      recursive: true,
+    });
+
+    // 3. Ouvrir la feuille de partage iOS native pour permettre l'export.
+    await Share.share({
+      title: `Facture ${invoice.number || ''}`,
+      url: writeResult.uri,
+      dialogTitle: 'Enregistrer ou partager la facture',
+    });
+    return;
+  }
+
+  // Web : flow classique <a download>
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${invoice.number || invoice.invoice_number || 'facture'}.pdf`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => {
