@@ -66,6 +66,11 @@ async function ensureStripeInit() {
  * Vrai si Apple Pay est dispo sur ce device (iPhone avec carte enregistrée
  * dans Wallet, et merchant ID configuré).
  *
+ * ⚠️ Quirk du plugin v7 : `Stripe.isApplePayAvailable()` THROW si Apple
+ * Pay est INDISPONIBLE, et resolve avec `undefined` (= void) si DISPONIBLE.
+ * Donc on considère "OK" toute résolution sans erreur, et on capte
+ * uniquement les rejects.
+ *
  * @returns {Promise<boolean>}
  */
 export async function isApplePayAvailable() {
@@ -73,10 +78,10 @@ export async function isApplePayAvailable() {
   try {
     await ensureStripeInit();
     const { Stripe } = await import('@capacitor-community/stripe');
-    const result = await Stripe.isApplePayAvailable();
-    return Boolean(result?.available);
+    await Stripe.isApplePayAvailable();
+    return true;  // pas de throw → Apple Pay dispo
   } catch (err) {
-    console.warn('[applePay] isApplePayAvailable failed:', err?.message);
+    console.warn('[applePay] isApplePayAvailable rejected:', err?.message);
     return false;
   }
 }
@@ -116,14 +121,18 @@ export async function payWithApplePay(packageId) {
     await ensureStripeInit();
     const { Stripe } = await import('@capacitor-community/stripe');
 
-    // 2. Vérifier qu'Apple Pay est dispo (sinon on bascule sur le flow web)
-    const avail = await Stripe.isApplePayAvailable();
-    console.log('[applePay] isApplePayAvailable →', avail);
-    if (!avail?.available) {
+    // 2. Test de disponibilité Apple Pay.
+    //    Le plugin v7 THROW si indispo, resolve avec undefined si dispo.
+    //    Donc on considère le succès = absence d'exception.
+    try {
+      await Stripe.isApplePayAvailable();
+      console.log('[applePay] isApplePayAvailable → OK (resolve sans throw)');
+    } catch (availErr) {
+      console.warn('[applePay] isApplePayAvailable THROW:', availErr?.message);
       return {
         ok: false,
         notAvailable: true,
-        reason: 'Apple Pay non disponible sur ce device. Vérifie : (1) au moins une carte ajoutée dans l\'app Wallet d\'iOS, (2) capability "Apple Pay" cochée dans Xcode → Signing & Capabilities, (3) merchant.com.trajetpro.app n\'est plus en rouge.',
+        reason: `Apple Pay non disponible sur ce device : ${availErr?.message || 'raison inconnue'}. Vérifie qu'une carte est ajoutée dans l'app Wallet d'iOS.`,
       };
     }
 
