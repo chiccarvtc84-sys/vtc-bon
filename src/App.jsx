@@ -39,6 +39,7 @@ import {
   markInvoicePaid as sbMarkInvoicePaid,
   markInvoiceUnpaid as sbMarkInvoiceUnpaid,
   verifySiret as sbVerifySiret,
+  markSiretVerified as sbMarkSiretVerified,
   isDisposableEmail as sbIsDisposableEmail,
   deleteMyAccount as sbDeleteMyAccount,
   signInWithApple as sbSignInWithApple,
@@ -2137,10 +2138,87 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
     }
   };
 
+  // ─── Aperçu PDF in-app ───────────────────────────────────────────────
+  // Génère le PDF en mémoire et l'affiche dans une iframe modale. iOS
+  // WKWebView et tous les navigateurs modernes savent rendre les PDF
+  // nativement via `application/pdf` MIME type. L'utilisateur peut
+  // pinch-zoomer comme dans Aperçu macOS / Files iOS.
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  const onPreview = async () => {
+    setPreviewLoading(true);
+    try {
+      const blob = await buildInvoicePdf(invoice, booking, realProfile, invoiceSettings);
+      const url = URL.createObjectURL(blob);
+      setPreviewUrl(url);
+      setPreviewOpen(true);
+    } catch (e) {
+      alert("Erreur lors de la génération de l'aperçu : " + (e?.message || e));
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  // Cleanup du blob URL quand on ferme la preview (sinon fuite mémoire)
+  const closePreview = () => {
+    setPreviewOpen(false);
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
+  };
+
   return (
     <div className="tp-scroll tp-no-scroll tp-fade-in">
       <TopBar title={invoice.number} subtitle={`Émise le ${formatDate(invoice.date)}`} onBack={onBack}
-        rightAction={<button onClick={onDownload} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }} title="Télécharger le PDF"><Download size={16}/></button>}/>
+        rightAction={
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={onPreview} disabled={previewLoading} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }} title="Aperçu PDF">
+              {previewLoading ? <Loader2 size={16} style={{ animation: "tp-spin 1s linear infinite" }}/> : <Eye size={16}/>}
+            </button>
+            <button onClick={onDownload} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }} title="Télécharger le PDF"><Download size={16}/></button>
+          </div>
+        }/>
+
+      {/* Modal aperçu PDF */}
+      {previewOpen && previewUrl && (
+        <div className="tp-overlay" onClick={closePreview} style={{ alignItems: "stretch", padding: 0 }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            width: "100%", height: "100%", maxWidth: 430,
+            background: "var(--surface)",
+            display: "flex", flexDirection: "column",
+          }}>
+            <div style={{
+              padding: "calc(env(safe-area-inset-top) + 10px) 14px 10px",
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              background: "var(--bg-gradient)", borderBottom: "1px solid var(--border)",
+            }}>
+              <div className="tp-serif" style={{ fontSize: 16, fontWeight: 600 }}>Aperçu — {invoice.number}</div>
+              <button onClick={closePreview} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }}>
+                <X size={18}/>
+              </button>
+            </div>
+            <iframe
+              src={previewUrl}
+              title={`Facture ${invoice.number}`}
+              style={{ flex: 1, width: "100%", border: "none", background: "#fff" }}
+            />
+            <div style={{
+              padding: "10px 14px calc(env(safe-area-inset-bottom) + 14px)",
+              borderTop: "1px solid var(--border)", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8,
+            }}>
+              <button onClick={onDownload} className="tp-btn tp-btn-ghost" style={{ justifyContent: "center" }}>
+                <Download size={15}/> Télécharger
+              </button>
+              <button onClick={onShareInvoice} className="tp-btn tp-btn-primary" style={{ justifyContent: "center" }}>
+                <Send size={15}/> Partager
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ padding: "8px 20px 20px", display: "flex", flexDirection: "column", gap: 16 }}>
         <div className="tp-card-elevated" style={{ padding: 20 }}>
@@ -2864,12 +2942,16 @@ function InsufficientModal({ open, onClose, onBuy, action, currentBalance }) {
 // passe par un flow auth séparé).
 function EditProfileModal({ open, currentUser, onClose, onSave }) {
   const [form, setForm] = useState({
-    name: "", phone: "", siret: "", companyName: "", evtcNumber: "",
+    name: "", phone: "", email: "", siret: "", companyName: "", evtcNumber: "",
     proCardNumber: "", vehicleModel: "", vehiclePlate: "",
     iban: "", vatIntra: "",
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // Message de succès séparé : utilisé quand l'email change a déclenché
+  // l'envoi d'un mail de confirmation Supabase (le profil est sauvegardé,
+  // mais le nouveau mail n'est validé qu'après clic sur le lien Supabase).
+  const [pendingEmailNotice, setPendingEmailNotice] = useState("");
 
   // Pré-remplir avec les valeurs actuelles à chaque ouverture
   useEffect(() => {
@@ -2877,6 +2959,7 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
       setForm({
         name: currentUser.name || "",
         phone: currentUser.phone || "",
+        email: currentUser.email || "",
         siret: currentUser.siret || "",
         companyName: currentUser.companyName || "",
         evtcNumber: currentUser.evtcNumber || "",
@@ -2887,6 +2970,7 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
         vatIntra: currentUser.vatIntra || "",
       });
       setError("");
+      setPendingEmailNotice("");
       setLoading(false);
     }
   }, [open, currentUser]);
@@ -2895,15 +2979,19 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
 
   const handleSubmit = async () => {
     setError("");
+    setPendingEmailNotice("");
     if (!form.name.trim()) { setError("Le nom est requis"); return; }
     if (form.phone.trim() && !isValidPhone(form.phone)) {
       setError("Numéro de téléphone français invalide (ex : +33 6 12 34 56 78)");
       return;
     }
-    // SIRET : 14 chiffres, espaces autorisés à la saisie. On vérifie
-    // la longueur après nettoyage. Champ optionnel à la modification
-    // (un user qui le laisse vide garde l'ancien — la sanitization
-    // côté supabase.js convertit '' en null).
+    // Email : format basique. Le vrai check est fait par Supabase Auth.
+    const newEmail = form.email.trim().toLowerCase();
+    const emailChanged = newEmail && newEmail !== (currentUser?.email || "").toLowerCase();
+    if (newEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+      setError("Format email invalide.");
+      return;
+    }
     const cleanSiret = form.siret.replace(/\s/g, '');
     if (cleanSiret && !/^\d{14}$/.test(cleanSiret)) {
       setError("SIRET invalide : doit contenir exactement 14 chiffres.");
@@ -2911,6 +2999,7 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
     }
     setLoading(true);
     try {
+      // 1. Sauvegarder les champs profil "réguliers"
       await onSave({
         name: form.name.trim(),
         phone: form.phone.trim() || null,
@@ -2923,6 +3012,27 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
         iban: form.iban.replace(/\s/g, "").toUpperCase() || null,
         vat_intra: form.vatIntra.trim().toUpperCase() || null,
       });
+
+      // 2. Si l'email a changé, déclencher le flow Supabase Auth :
+      //    supabase.auth.updateUser envoie automatiquement un mail de
+      //    confirmation à la NOUVELLE adresse. L'email n'est mis à jour
+      //    dans auth.users qu'après clic sur ce lien.
+      if (emailChanged) {
+        const { error: emailErr } = await supabase.auth.updateUser({ email: newEmail });
+        if (emailErr) {
+          // L'erreur la plus fréquente : email déjà utilisé par un autre compte
+          throw new Error(`Email : ${emailErr.message}`);
+        }
+        setPendingEmailNotice(
+          `Un email de confirmation a été envoyé à ${newEmail}. ` +
+          `Cliquez sur le lien dans ce mail pour valider le changement. ` +
+          `En attendant, votre adresse actuelle reste active.`
+        );
+        setLoading(false);
+        // On NE FERME PAS la modale : le user doit voir le message ci-dessus
+        return;
+      }
+
       onClose();
     } catch (e) {
       setError(e?.message || "Erreur lors de l'enregistrement");
@@ -3001,12 +3111,31 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
             <input className="tp-input" value={form.vatIntra} onChange={e => update("vatIntra", e.target.value.toUpperCase())} placeholder="FR12345678901"/>
           </div>
 
-          <div className="tp-card" style={{ padding: 12, marginBottom: 16, background: "var(--surface)", borderColor: "rgba(255,255,255,0.06)" }}>
-            <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
-              <Info size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 6, color: "var(--accent)" }}/>
-              L'<b>email</b> n'est pas modifiable ici — contactez le support pour le changer (vérification email obligatoire).
+          <div style={fieldStyle}>
+            <div style={labelStyle}>Email</div>
+            <input
+              className="tp-input"
+              type="email"
+              autoCapitalize="none"
+              autoCorrect="off"
+              value={form.email}
+              onChange={e => update("email", e.target.value.trim().toLowerCase())}
+              placeholder="vous@exemple.com"
+            />
+            <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 6, lineHeight: 1.4 }}>
+              <Info size={10} style={{ display: "inline", verticalAlign: "middle", marginRight: 4, color: "var(--accent)" }}/>
+              Si vous changez d'email, un lien de confirmation sera envoyé à la
+              <b> nouvelle adresse</b>. Le changement est effectif uniquement
+              après clic sur ce lien.
             </div>
           </div>
+
+          {pendingEmailNotice && (
+            <div className="tp-card" style={{ padding: 10, marginBottom: 14, background: "var(--success-soft)", borderColor: "rgba(74,222,128,0.3)", fontSize: 12, color: "var(--success)", display: "flex", alignItems: "flex-start", gap: 8, lineHeight: 1.5 }}>
+              <Mail size={14} style={{ flexShrink: 0, marginTop: 1 }}/>
+              <span>{pendingEmailNotice}</span>
+            </div>
+          )}
 
           {error && (
             <div className="tp-card" style={{ padding: 10, marginBottom: 14, background: "var(--error-soft)", borderColor: "rgba(248,113,113,0.3)", fontSize: 12, color: "var(--error)", display: "flex", alignItems: "flex-start", gap: 8, lineHeight: 1.5 }}>
@@ -3020,6 +3149,126 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
               ? <><Loader2 size={16} style={{ animation: "tp-spin 1s linear infinite" }}/> Enregistrement…</>
               : <><Check size={16}/> Enregistrer les modifications</>}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------
+   PROFILE VERIFICATION STATUS — état des vérifications pro (SIRET / Email)
+   -------------------------------------------------------------------------
+   3 statuts par champ :
+     - ✅ vérifié    (badge vert, validé par INSEE / Supabase)
+     - ⏳ en attente (badge orange, bouton "Vérifier maintenant")
+     - ❌ refusé     (badge rouge, message + correctif)
+
+   Pour le SIRET : appelle l'Edge Function verify-siret (API INSEE) à la
+   demande, puis persiste via le RPC mark_siret_verified si OK.
+   Pour l'email : status auto via Supabase Auth.
+   Pour la carte VTC : pas d'API publique → "Soumettre pour vérification
+   manuelle" qui ouvre un mailto au support.
+   ------------------------------------------------------------------------- */
+function ProfileVerificationStatus({ currentUser }) {
+  const [siretStatus, setSiretStatus] = useState(
+    currentUser?.siretVerified ? 'verified' : (currentUser?.siret ? 'pending' : 'missing')
+  );
+  const [siretError, setSiretError] = useState('');
+  const [siretLoading, setSiretLoading] = useState(false);
+  const emailVerified = !!currentUser?.emailVerified;
+
+  const verifySiretNow = async () => {
+    if (!currentUser?.siret) {
+      setSiretError("Aucun SIRET renseigné. Modifiez votre profil pour l'ajouter.");
+      setSiretStatus('refused');
+      return;
+    }
+    setSiretLoading(true);
+    setSiretError('');
+    try {
+      const result = await sbVerifySiret(currentUser.siret);
+      if (result?.valid) {
+        await sbMarkSiretVerified(currentUser.id);
+        setSiretStatus('verified');
+      } else {
+        setSiretStatus('refused');
+        setSiretError(result?.reason || "SIRET non reconnu par l'INSEE.");
+      }
+    } catch (e) {
+      setSiretStatus('refused');
+      setSiretError(e?.message || "Erreur lors de la vérification SIRET.");
+    } finally {
+      setSiretLoading(false);
+    }
+  };
+
+  const Badge = ({ status }) => {
+    const config = {
+      verified: { bg: 'var(--success-soft)', color: 'var(--success)', icon: CheckCircle2, label: 'Vérifié' },
+      pending:  { bg: 'var(--warn-soft)',    color: 'var(--warn)',    icon: AlertCircle,  label: 'En attente' },
+      refused:  { bg: 'var(--error-soft)',   color: 'var(--error)',   icon: AlertCircle,  label: 'Refusé' },
+      missing:  { bg: 'var(--surface-2)',    color: 'var(--text-dim)',icon: AlertCircle,  label: 'Non renseigné' },
+    }[status] || { bg: 'var(--surface-2)', color: 'var(--text-dim)', icon: AlertCircle, label: status };
+    const Icon = config.icon;
+    return (
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        fontSize: 10, fontWeight: 700,
+        padding: '3px 8px', borderRadius: 999,
+        background: config.bg, color: config.color,
+        textTransform: 'uppercase', letterSpacing: '0.04em',
+      }}>
+        <Icon size={11}/> {config.label}
+      </span>
+    );
+  };
+
+  return (
+    <div style={{ padding: "0 20px 12px" }}>
+      <div className="tp-card" style={{ padding: 14, background: "var(--surface)" }}>
+        <div className="tp-label" style={{ marginBottom: 10 }}>Vérification professionnelle</div>
+
+        {/* Email */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Mail size={14} style={{ color: 'var(--accent)' }}/>
+            <div style={{ fontSize: 12, fontWeight: 600 }}>Email</div>
+          </div>
+          <Badge status={emailVerified ? 'verified' : 'pending'}/>
+        </div>
+
+        {/* SIRET */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <FileCheck size={14} style={{ color: 'var(--accent)' }}/>
+            <div style={{ fontSize: 12, fontWeight: 600 }}>SIRET (API INSEE)</div>
+          </div>
+          <Badge status={siretStatus}/>
+        </div>
+
+        {/* Bouton de re-vérification SIRET (visible si pas vérifié) */}
+        {siretStatus !== 'verified' && (
+          <>
+            {siretError && (
+              <div style={{ fontSize: 11, color: 'var(--error)', padding: '4px 0 8px', display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                <AlertCircle size={12} style={{ flexShrink: 0, marginTop: 1 }}/>
+                <span>{siretError}</span>
+              </div>
+            )}
+            <button onClick={verifySiretNow} disabled={siretLoading || !currentUser?.siret}
+              className="tp-btn tp-btn-ghost"
+              style={{ width: '100%', justifyContent: 'center', fontSize: 12, marginTop: 8 }}>
+              {siretLoading
+                ? <><Loader2 size={13} style={{ animation: 'tp-spin 1s linear infinite' }}/> Vérification…</>
+                : <><ShieldCheck size={13}/> Vérifier mon SIRET maintenant</>}
+            </button>
+          </>
+        )}
+
+        <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.5 }}>
+          <Info size={10} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4, color: 'var(--accent)' }}/>
+          La vérification de la carte VTC nécessite un examen manuel. Pour la
+          demander, envoyez une copie à <b>contact@trajetpro.fr</b>.
         </div>
       </div>
     </div>
@@ -3201,6 +3450,11 @@ function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, 
             <ChevronRight size={14} style={{ color: "var(--muted)" }}/>
           </button>
         </div>
+      )}
+
+      {/* Statut de vérification professionnelle (SIRET + Email) */}
+      {!isGuest && currentUser && (
+        <ProfileVerificationStatus currentUser={currentUser}/>
       )}
 
       {!isGuest && onEditProfile && (

@@ -431,6 +431,20 @@ export async function verifySiret(siret) {
   return data;
 }
 
+/**
+ * Marque le SIRET de l'utilisateur connecté comme vérifié.
+ * Appelé après un retour OK de verifySiret(), pour persister le statut
+ * dans users.siret_verified. RLS + RPC SECURITY DEFINER avec auth.uid()
+ * check pour éviter qu'un user marque le SIRET de quelqu'un d'autre.
+ *
+ * @param {string} userId
+ */
+export async function markSiretVerified(userId) {
+  const { data, error } = await supabase.rpc('mark_siret_verified', { p_user_id: userId });
+  if (error) throw new Error(`mark_siret_verified RPC échouée : ${error.message}`);
+  return data === true;
+}
+
 // ----------------------------------------------------------------------------
 // Bons de course (bookings)
 // ----------------------------------------------------------------------------
