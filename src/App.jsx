@@ -1787,32 +1787,59 @@ function BookingsScreen({ bookings, tokenBalance, onOpenBooking, onNewBooking, o
     return matchSearch && matchFilter;
   }).sort((a,b) => new Date(a.dateTime) - new Date(b.dateTime));
 
-  return (
-    <div className="tp-scroll tp-fade-in">
-      <TopBar title="Mes courses" subtitle={`${bookings.length} bon${bookings.length>1?"s":""} au total`}
-        rightAction={
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <TokenBadge balance={tokenBalance} onClick={() => onGoTab("tokens")} compact/>
-            <button onClick={onNewBooking} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }}><Plus size={18}/></button>
-          </div>
-        }/>
+return (
+    /* Layout type "app native" (Uber/Deliveroo) :
+       - wrapper flex column qui occupe toute la hauteur disponible dans tp-phone
+       - header (TopBar + recherche + filtres) en flex-shrink:0 → ne bouge jamais
+       - liste en flex:1 + overflow-y:auto → SEULE zone scrollable verticalement
+       - La BottomNav reste fixe en dehors (gérée par le parent App).
+       On n'utilise PAS tp-scroll ici car on veut un layout sticky personnalisé. */
+    <div className="tp-fade-in" style={{
+      flex: 1,
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",                       // bloque le scroll global du screen
+      paddingTop: "env(safe-area-inset-top)",   // sous la status bar iPhone
+      minHeight: 0,                             // permet à flex:1 de scroller à l'intérieur
+    }}>
+      {/* ─── HEADER FIXE ─────────────────────────────────────────── */}
+      <div style={{ flexShrink: 0, background: "var(--bg-gradient)", paddingBottom: 14 }}>
+        <TopBar title="Mes courses" subtitle={`${bookings.length} bon${bookings.length>1?"s":""} au total`}
+          rightAction={
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <TokenBadge balance={tokenBalance} onClick={() => onGoTab("tokens")} compact/>
+              <button onClick={onNewBooking} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }}><Plus size={18}/></button>
+            </div>
+          }/>
 
-      <div style={{ padding: "0 20px" }}>
-        <div style={{ position: "relative" }}>
-          <Search size={15} style={{ position: "absolute", left: 14, top: 13, color: "var(--muted)" }}/>
-          <input className="tp-input" style={{ paddingLeft: 38 }} placeholder="Rechercher un client, une adresse..." value={search} onChange={e => setSearch(e.target.value)}/>
+        <div style={{ padding: "0 20px" }}>
+          <div style={{ position: "relative" }}>
+            <Search size={15} style={{ position: "absolute", left: 14, top: 13, color: "var(--muted)" }}/>
+            <input className="tp-input" style={{ paddingLeft: 38 }} placeholder="Rechercher un client, une adresse..." value={search} onChange={e => setSearch(e.target.value)}/>
+          </div>
+        </div>
+
+        <div style={{ padding: "12px 20px 0", display: "flex", gap: 8, overflowX: "auto" }}>
+          {[{ v: "all", l: "Toutes" }, { v: "confirmed", l: "Confirmées" }, { v: "pending", l: "En attente" }].map(f => (
+            <button key={f.v} onClick={() => setFilter(f.v)}
+              className={`tp-chip ${filter === f.v ? "tp-chip-accent" : ""}`}
+              style={{ cursor: "pointer", border: "1px solid var(--border)", padding: "6px 14px", fontSize: 12, flexShrink: 0 }}>{f.l}</button>
+          ))}
         </div>
       </div>
 
-      <div style={{ padding: "14px 20px 0", display: "flex", gap: 8, overflowX: "auto" }}>
-        {[{ v: "all", l: "Toutes" }, { v: "confirmed", l: "Confirmées" }, { v: "pending", l: "En attente" }].map(f => (
-          <button key={f.v} onClick={() => setFilter(f.v)}
-            className={`tp-chip ${filter === f.v ? "tp-chip-accent" : ""}`}
-            style={{ cursor: "pointer", border: "1px solid var(--border)", padding: "6px 14px", fontSize: 12 }}>{f.l}</button>
-        ))}
-      </div>
-
-      <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+      {/* ─── LISTE SCROLLABLE INDÉPENDAMMENT ─────────────────────── */}
+      <div style={{
+        flex: 1,
+        overflowY: "auto",
+        WebkitOverflowScrolling: "touch",        // scroll inertiel iOS
+        overscrollBehavior: "contain",           // pas de "rebond" qui leak vers le body
+        padding: "14px 20px calc(110px + env(safe-area-inset-bottom)) 20px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        minHeight: 0,
+      }}>
         {filtered.length === 0 ? (
           <div style={{ padding: 40, textAlign: "center", color: "var(--text-dim)" }}>
             <Car size={32} style={{ opacity: 0.3, margin: "0 auto 10px" }}/>
