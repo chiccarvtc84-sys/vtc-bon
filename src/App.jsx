@@ -5771,13 +5771,21 @@ export default function App() {
     if (wantApplePay && isNativePlatform()) {
       const result = await payWithApplePay(packageId);
       if (result.cancelled) {
-        // L'utilisateur a annulé la sheet Apple Pay → on remonte une erreur
-        // muette pour que la modale d'achat reste ouverte sans alert.
-        throw new Error("Compte requis"); // déclenche le silence côté caller
+        // Annulation par l'utilisateur sur la sheet → silence + retour modal
+        throw new Error("Compte requis");
       }
       if (result.notAvailable) {
-        // Pas de carte dans Wallet, ou Apple Pay désactivé → on bascule
-        // vers le flow Checkout web classique pour éviter de bloquer l'achat.
+        // Apple Pay indisponible : au lieu d'un fallback silencieux qui
+        // donne l'illusion que le bouton ne marche pas, on demande
+        // explicitement à l'utilisateur s'il veut basculer sur le paiement
+        // par carte (Stripe Checkout web).
+        const fallback = window.confirm(
+          `Apple Pay non disponible :\n\n${result.reason}\n\n` +
+          `Voulez-vous payer par carte bancaire à la place ?`
+        );
+        if (!fallback) {
+          throw new Error("Compte requis"); // ferme la modal sans alert
+        }
         const { url } = await createCheckoutSession(packageId);
         if (!url) throw new Error("URL Stripe manquante");
         window.location.assign(url);
@@ -5786,8 +5794,7 @@ export default function App() {
       if (!result.ok) {
         throw new Error(result.reason || "Apple Pay échoué");
       }
-      // Succès : le webhook va créditer les tokens en async (~1-2s).
-      // On rafraîchit le solde après un court délai.
+      // Succès : le webhook va créditer en async (~1-2s).
       setTimeout(() => { refreshTokens().catch(() => {}); }, 1500);
       return purchase;
     }

@@ -41,7 +41,10 @@ let stripeInitPromise = null;
  * réutilisent la promesse résolue.
  */
 async function ensureStripeInit() {
-  if (!isNativePlatform()) return false;
+  if (!isNativePlatform()) {
+    console.log('[applePay] ensureStripeInit: not native platform → skip');
+    return false;
+  }
   if (stripeInitPromise) return stripeInitPromise;
 
   stripeInitPromise = (async () => {
@@ -49,8 +52,10 @@ async function ensureStripeInit() {
     if (!publishableKey) {
       throw new Error('VITE_STRIPE_PUBLIC_KEY manquante dans .env');
     }
+    console.log('[applePay] Stripe.initialize avec key', publishableKey.slice(0, 12) + '...');
     const { Stripe } = await import('@capacitor-community/stripe');
     await Stripe.initialize({ publishableKey });
+    console.log('[applePay] Stripe.initialize OK');
     return true;
   })();
 
@@ -91,16 +96,20 @@ export async function isApplePayAvailable() {
  * }>}
  */
 export async function payWithApplePay(packageId) {
+  console.log('[applePay] payWithApplePay START', { packageId, native: isNativePlatform() });
+
   if (!isNativePlatform()) {
-    return { ok: false, notAvailable: true, reason: 'Apple Pay disponible seulement sur iPhone.' };
+    return { ok: false, notAvailable: true, reason: 'Apple Pay disponible seulement sur iPhone (vous êtes sur web).' };
   }
 
+  // 1. Backend crée le PaymentIntent et renvoie clientSecret
   let intent;
   try {
-    // 1. Backend crée le PaymentIntent et renvoie clientSecret
     intent = await createPaymentIntent(packageId);
+    console.log('[applePay] PaymentIntent créé', { id: intent.paymentIntentId, amount: intent.amountCents });
   } catch (err) {
-    return { ok: false, reason: err?.message || 'Erreur création paiement' };
+    console.error('[applePay] createPaymentIntent FAIL', err?.message);
+    return { ok: false, reason: `Création PaymentIntent : ${err?.message || 'erreur inconnue'}` };
   }
 
   try {
@@ -109,11 +118,12 @@ export async function payWithApplePay(packageId) {
 
     // 2. Vérifier qu'Apple Pay est dispo (sinon on bascule sur le flow web)
     const avail = await Stripe.isApplePayAvailable();
+    console.log('[applePay] isApplePayAvailable →', avail);
     if (!avail?.available) {
       return {
         ok: false,
         notAvailable: true,
-        reason: 'Apple Pay non configuré sur cet appareil. Configurez une carte dans Wallet pour utiliser Apple Pay.',
+        reason: 'Apple Pay non disponible sur ce device. Vérifie : (1) au moins une carte ajoutée dans l\'app Wallet d\'iOS, (2) capability "Apple Pay" cochée dans Xcode → Signing & Capabilities, (3) merchant.com.trajetpro.app n\'est plus en rouge.',
       };
     }
 
@@ -135,7 +145,9 @@ export async function payWithApplePay(packageId) {
     });
 
     // 4. Présenter la sheet (Face ID prompt système → l'utilisateur valide)
+    console.log('[applePay] presentApplePay()…');
     const result = await Stripe.presentApplePay();
+    console.log('[applePay] presentApplePay result →', result);
 
     // result.paymentResult vaut 'Completed' / 'Canceled' / 'Failed'
     if (result?.paymentResult === 'Completed') {
@@ -150,6 +162,7 @@ export async function payWithApplePay(packageId) {
     }
     return { ok: false, reason: `Paiement échoué (${result?.paymentResult})` };
   } catch (err) {
-    return { ok: false, reason: err?.message || 'Erreur Apple Pay' };
+    console.error('[applePay] EXCEPTION', err?.message, err);
+    return { ok: false, reason: err?.message || 'Erreur Apple Pay (cf. logs Xcode)' };
   }
 }
