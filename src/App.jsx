@@ -3077,26 +3077,20 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
     return () => clearTimeout(timer);
   }, [form.siret, open, currentUser]);
 
-  // ─── Validation automatique carte VTC (format) ────────────────────────
-  // Pas d'API publique pour vérifier qu'une carte VTC existe vraiment dans
-  // le registre VTC du Ministère de l'Intérieur. On valide le format :
-  //   EVTC + département (2-3 chiffres) + année (2 chiffres) + numéro (4-7 chiffres)
-  //   Ex: EVTC084220001  (Vaucluse, 2022, n°0001)
+  // ─── Validation automatique carte VTC (permissive) ────────────────────
+  // Pas d'API publique pour vérifier qu'un n° VTC existe vraiment dans le
+  // registre du Ministère de l'Intérieur. On accepte donc TOUT format
+  // tant qu'au moins un caractère est saisi — le chauffeur engage sa
+  // responsabilité légale s'il fournit un faux numéro (faux et usage de
+  // faux, art. 441-1 CP). La vraie vérif est faite par la Préfecture
+  // lors d'un contrôle terrain.
   useEffect(() => {
     if (!open) return;
-    const v = form.evtcNumber.trim().toUpperCase();
+    const v = form.evtcNumber.trim();
     if (v.length === 0) {
       setVtcValidation({ status: 'idle', reason: '' });
-      return;
-    }
-    // Regex : "EVTC" + 9-12 chiffres (département + année + numéro)
-    if (/^EVTC\d{9,12}$/.test(v)) {
-      setVtcValidation({ status: 'valid', reason: '' });
     } else {
-      setVtcValidation({
-        status: 'invalid',
-        reason: 'Format attendu : EVTC suivi de 9 à 12 chiffres (ex: EVTC084220001).',
-      });
+      setVtcValidation({ status: 'valid', reason: '' });
     }
   }, [form.evtcNumber, open]);
 
@@ -3147,13 +3141,14 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
         }
       }
 
-      // 1ter. Carte VTC : marque comme vérifiée dès qu'un n° de carte
-      //       pro est renseigné (peu importe le format — la déclaration
-      //       du chauffeur engage sa responsabilité). Le bandeau de
+      // 1ter. Carte VTC : marque comme vérifiée dès qu'au moins l'un des
+      //       2 champs VTC est renseigné (n° d'inscription VTC OU n° de
+      //       carte pro), peu importe le format. La déclaration du
+      //       chauffeur engage sa responsabilité légale. Le bandeau de
       //       sécurité en haut du Profil affiche immédiatement la pastille
       //       verte "Carte VTC vérifiée".
-      const proCardClean = form.proCardNumber.trim();
-      if (proCardClean && !currentUser.vtcLicenseVerified) {
+      const hasVtcNumber = form.evtcNumber.trim() || form.proCardNumber.trim();
+      if (hasVtcNumber && !currentUser.vtcLicenseVerified) {
         try {
           await sbMarkEvtcVerified(currentUser.id);
         } catch (e) {
@@ -3275,7 +3270,7 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
             )}
             {vtcValidation.status === 'valid' && (
               <div style={{ fontSize: 11, color: "var(--success)", marginTop: 4, display: "flex", alignItems: "center", gap: 4 }}>
-                <CheckCircle2 size={11}/> Format valide (vérification réelle par le ministère côté Préfecture)
+                <CheckCircle2 size={11}/> Numéro accepté (vérification terrain par la Préfecture)
               </div>
             )}
           </div>
@@ -3421,11 +3416,27 @@ function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, 
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600 }}>{displayName}</div>
             <div style={{ fontSize: 12, color: "var(--text-dim)" }}>{isGuest ? "Invité" : displayEmail}</div>
-            {!isGuest && (
-              <div className="tp-chip tp-chip-success" style={{ marginTop: 6 }}>
-                <ShieldCheck size={10}/> Compte vérifié
-              </div>
-            )}
+            {!isGuest && (() => {
+              // Compte considéré "vérifié" UNIQUEMENT si les 3 vérifs
+              // métier sont OK : email + SIRET + carte VTC. L'appareil
+              // (device fingerprint) est optionnel — il n'engage pas
+              // la responsabilité légale du chauffeur. Si l'une des 3
+              // manque, on affiche "Non vérifié" en orange pour inviter
+              // l'utilisateur à compléter son profil.
+              const fullyVerified =
+                currentUser?.emailVerified &&
+                currentUser?.siretVerified &&
+                currentUser?.vtcLicenseVerified;
+              return fullyVerified ? (
+                <div className="tp-chip tp-chip-success" style={{ marginTop: 6 }}>
+                  <ShieldCheck size={10}/> Compte vérifié
+                </div>
+              ) : (
+                <div className="tp-chip tp-chip-warn" style={{ marginTop: 6 }}>
+                  <AlertCircle size={10}/> Compte non vérifié
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
