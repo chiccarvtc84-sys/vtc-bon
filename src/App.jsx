@@ -2041,7 +2041,7 @@ function InvoicesScreen({ invoices, bookings, tokenBalance, onOpenInvoice, onGoT
 /* -------------------------------------------------------------------------
    INVOICE DETAIL
    ------------------------------------------------------------------------- */
-function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, currentUser = null }) {
+function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, currentUser = null, onStatusChanged }) {
   if (!invoice) return null;
 
   // Profil "en dur" pour le PDF : on prend les VRAIES données du compte
@@ -2287,8 +2287,12 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
                   if (!window.confirm(`Confirmer l'encaissement de la facture ${invoice.number} (${eur(invoice.amount)}) ?`)) return;
                   try {
                     await sbMarkInvoicePaid(invoice.id);
+                    // 🔄 Notifie le parent → met à jour l'état local immédiat
+                    // (statut + paid_at + liste globale Factures). Sans ce
+                    // callback, l'UI affichait toujours "En attente" et le
+                    // total "Encaissé" restait à 0 € jusqu'au prochain reload.
+                    onStatusChanged?.('paid');
                     alert("✅ Facture marquée comme encaissée.");
-                    onBack(); // retour à la liste qui se rafraîchit au prochain load
                   } catch (e) {
                     alert("Erreur : " + (e?.message || e));
                   }
@@ -2309,8 +2313,8 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
                   if (!window.confirm("Repasser cette facture en « en attente » ?")) return;
                   try {
                     await sbMarkInvoiceUnpaid(invoice.id);
+                    onStatusChanged?.('pending');
                     alert("Facture repassée en attente.");
-                    onBack();
                   } catch (e) {
                     alert("Erreur : " + (e?.message || e));
                   }
@@ -6380,7 +6384,27 @@ export default function App() {
     />;
   } else if (detailInvoice) {
     const relatedBooking = bookings.find(b => b.id === detailInvoice.bookingId);
-    screen = <InvoiceDetail invoice={detailInvoice} booking={relatedBooking} onBack={() => setDetailInvoice(null)} invoiceSettings={invoiceSettings} currentUser={currentUser}/>;
+    screen = <InvoiceDetail
+      invoice={detailInvoice}
+      booking={relatedBooking}
+      onBack={() => setDetailInvoice(null)}
+      invoiceSettings={invoiceSettings}
+      currentUser={currentUser}
+      /* Callback déclenché après changement de statut (encaissée/en attente)
+         → on met à jour l'invoice en mémoire ET la liste globale, pour que
+         la facture affichée et le total "Encaissé" sur l'écran Factures
+         reflètent immédiatement le changement (avant on devait quitter et
+         revenir, ou rafraîchir l'app). */
+      onStatusChanged={(newStatus) => {
+        const updated = {
+          ...detailInvoice,
+          status: newStatus,
+          paidAt: newStatus === 'paid' ? new Date().toISOString() : null,
+        };
+        setDetailInvoice(updated);
+        setInvoices(prev => prev.map(inv => inv.id === updated.id ? updated : inv));
+      }}
+    />;
   } else if (formOpen) {
     screen = <BookingForm
       initial={formInitial}
