@@ -148,12 +148,14 @@ Deno.serve(async (req: Request) => {
     const stripe = new Stripe(stripeKey, { apiVersion: "2024-06-20" });
 
     // Création du PaymentIntent. amount en centimes, EUR.
-    // automatic_payment_methods activé pour qu'Apple Pay / Google Pay soient
-    // proposés automatiquement par le SDK natif sur les devices compatibles.
+    // payment_method_types=['card'] (plus fiable que automatic_payment_methods
+    // pour le flow Apple Pay natif via @capacitor-community/stripe — le
+    // plugin confirme le PI avec un PaymentMethod de type 'card', dérivé
+    // du token Apple Pay généré par PassKit côté iOS).
     const intent = await stripe.paymentIntents.create({
       amount: pack.amountCents,
       currency: "eur",
-      automatic_payment_methods: { enabled: true },
+      payment_method_types: ["card"],
       receipt_email: profile?.email || user.email,
       description: `${pack.label} — ${pack.tokens} crédits TrajetPro`,
       metadata: {
