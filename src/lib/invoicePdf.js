@@ -411,52 +411,19 @@ export async function buildInvoicePdf(invoice, booking, profile, settings = {}) 
   pdf.text(eur(totalTTC), rightX, y + 6, { align: 'right' });
   y += 14;
 
-  // ─── Empreinte fiscale + QR code ─────────────────────────────────────
-  y += 4;
-  pdf.setFillColor(COLORS.surface);
-  pdf.roundedRect(margin, y, rightX - margin, 28, 2, 2, 'F');
-
-  // QR code à gauche
-  const qrPayload = JSON.stringify({
-    n: invoice.number || invoice.invoice_number,
-    fp: invoice.fingerprint,
-    a: totalTTC,
-    d: formatDateShort(invoice.date || invoice.issued_at),
-  });
-  try {
-    const qrDataUrl = await QRCode.toDataURL(qrPayload, {
-      width: 200, margin: 1,
-      color: { dark: COLORS.text, light: '#ffffff' },
-    });
-    pdf.addImage(qrDataUrl, 'PNG', margin + 3, y + 3, 22, 22);
-  } catch (_e) { /* QR optionnel */ }
-
-  pdf.setFontSize(8);
-  pdf.setFont('helvetica', 'bold');
-  pdf.setTextColor(COLORS.goldDark);
-  pdf.text('EMPREINTE FISCALE (SHA-256)', margin + 28, y + 7);
-
-  pdf.setFont('courier', 'normal');
-  pdf.setFontSize(7);
-  pdf.setTextColor(COLORS.text);
-  const fp = String(invoice.fingerprint || '').slice(0, 64);
-  pdf.text(fp.slice(0, 32), margin + 28, y + 12);
-  pdf.text(fp.slice(32, 64), margin + 28, y + 16);
-
-  pdf.setFont('helvetica', 'italic');
-  pdf.setFontSize(7);
-  pdf.setTextColor(COLORS.textMuted);
-  pdf.text('Authentifiable en cas de contrôle fiscal · QR code scannable', margin + 28, y + 22);
-
-  y += 34;
-
   // ─── Mentions légales ───────────────────────────────────────────────
+  // Bloc empreinte fiscale + QR code retiré le 2026-05-08 — il n'avait pas
+  // de validité légale réelle (l'empreinte n'était pas scellée/horodatée
+  // par un tiers de confiance) et créait de la confusion. La conformité CGI
+  // est assurée par : numérotation chronologique + traçabilité Stripe +
+  // mentions obligatoires ci-dessous.
+  y += 6;
+
   pdf.setFontSize(7);
   pdf.setTextColor(COLORS.textMuted);
   pdf.setFont('helvetica', 'normal');
 
   const legals = [
-    'Facture générée électroniquement et signée par empreinte fiscale SHA-256.',
     'Transport public particulier de personnes (VTC) — Décret n° 2017-483 du 6 avril 2017.',
     `TVA collectée au taux de ${vatRate} % (transport de personnes).`,
     'Conditions de paiement : à réception. Pas d\'escompte pour paiement anticipé.',

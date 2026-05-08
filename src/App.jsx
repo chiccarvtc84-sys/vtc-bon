@@ -36,6 +36,8 @@ import {
   extractBookingFromVoice,
   createCheckoutSession,
   findPurchaseBySessionId,
+  markInvoicePaid as sbMarkInvoicePaid,
+  markInvoiceUnpaid as sbMarkInvoiceUnpaid,
   verifySiret as sbVerifySiret,
   isDisposableEmail as sbIsDisposableEmail,
   deleteMyAccount as sbDeleteMyAccount,
@@ -1650,18 +1652,51 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div>
               <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>Distance (km)</div>
-              <input className="tp-input" type="number" step="0.1" value={form.distance} onChange={e => update("distance", parseFloat(e.target.value)||0)}/>
+              <input
+                className="tp-input" type="number" inputMode="decimal" step="0.1" min="0" placeholder="0"
+                value={form.distance === 0 ? "" : form.distance}
+                onChange={e => {
+                  const v = e.target.value;
+                  update("distance", v === "" ? 0 : parseFloat(v) || 0);
+                }}
+              />
             </div>
             <div>
               <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>Durée (min)</div>
-              <input className="tp-input" type="number" value={form.duration} onChange={e => update("duration", parseInt(e.target.value)||0)}/>
+              <input
+                className="tp-input" type="number" inputMode="numeric" min="0" placeholder="0"
+                value={form.duration === 0 ? "" : form.duration}
+                onChange={e => {
+                  const v = e.target.value;
+                  update("duration", v === "" ? 0 : parseInt(v) || 0);
+                }}
+              />
             </div>
           </div>
           <div style={{ marginTop: 10 }}>
             <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>Prix forfaitaire TTC</div>
             <div style={{ position: "relative" }}>
               <Euro size={16} style={{ position: "absolute", left: 14, top: 14, color: "var(--accent)" }}/>
-              <input className="tp-input" type="number" style={{ paddingLeft: 38, fontSize: 18, fontWeight: 700 }} value={form.price} onChange={e => update("price", parseFloat(e.target.value)||0)}/>
+              <input
+                className="tp-input"
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                min="0"
+                placeholder="0"
+                style={{ paddingLeft: 38, fontSize: 18, fontWeight: 700 }}
+                /* Bug fixé : avant on affichait `value={form.price}` avec
+                   form.price=0 par défaut → l'utilisateur tape "5" → l'input
+                   devient "05" parce que le 0 initial reste visible. Astuce :
+                   afficher chaîne vide tant que la valeur est 0, et reparser
+                   à chaque saisie. Comportement naturel : l'utilisateur tape
+                   "50" et voit exactement "50". */
+                value={form.price === 0 ? "" : form.price}
+                onChange={e => {
+                  const v = e.target.value;
+                  update("price", v === "" ? 0 : parseFloat(v) || 0);
+                }}
+              />
             </div>
             <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>Estimation : {eur(estimatedPrice)} (2,50 €/km + horaire)</div>
           </div>
@@ -2084,10 +2119,22 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
     });
   };
 
-  const onSms = () => {
-    openSms({
-      body: `Bonjour, votre facture ${invoice.number} de ${eur(invoice.amount)} (course du ${prestationDate}) — TrajetPro. Pour recevoir le PDF, répondez à ce message.`,
-    });
+  // SMS — limitation OS : le schéma `sms:` ne peut PAS attacher de fichier.
+  // Solution : on génère le PDF + on ouvre la feuille de partage iOS native,
+  // l'utilisateur tape "Messages" dans la feuille → le PDF est attaché en
+  // pièce jointe MMS/iMessage automatiquement. Beaucoup plus fiable que
+  // l'ancien `openSms` qui demandait au destinataire de "répondre pour
+  // recevoir le PDF" (jamais fait en pratique).
+  const onSms = async () => {
+    try {
+      const blob = await buildInvoicePdf(invoice, booking, realProfile, invoiceSettings);
+      await sharePdf(blob, filename, {
+        title: `Facture ${invoice.number}`,
+        text: `Bonjour, voici votre facture ${invoice.number} (${eur(invoice.amount)}) pour la course du ${prestationDate}. — TrajetPro`,
+      });
+    } catch (e) {
+      alert("Erreur lors de l'envoi : " + (e?.message || e));
+    }
   };
 
   return (
@@ -2135,17 +2182,51 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
             </div>
           </div>
 
-          <div style={{ marginTop: 18, padding: 14, background: "var(--surface-2)", borderRadius: 12, display: "flex", gap: 14, alignItems: "center" }}>
-            <PseudoQR seed={invoice.fingerprint} size={80}/>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                <Fingerprint size={13} style={{ color: "var(--accent)" }}/>
-                <div style={{ fontSize: 10, color: "var(--accent)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Empreinte fiscale</div>
+          {/* Bouton Marquer comme encaissée — uniquement si la facture
+              est en attente. Pour les paiements espèces/chèque/virement
+              hors-Stripe, le chauffeur change le statut manuellement.
+              Les factures payées via Stripe sont auto-marquées 'paid'
+              par le webhook → ce bouton n'apparaît pas. */}
+          {invoice.status !== "paid" && (
+            <div style={{ marginTop: 18 }}>
+              <button
+                onClick={async () => {
+                  if (!window.confirm(`Confirmer l'encaissement de la facture ${invoice.number} (${eur(invoice.amount)}) ?`)) return;
+                  try {
+                    await sbMarkInvoicePaid(invoice.id);
+                    alert("✅ Facture marquée comme encaissée.");
+                    onBack(); // retour à la liste qui se rafraîchit au prochain load
+                  } catch (e) {
+                    alert("Erreur : " + (e?.message || e));
+                  }
+                }}
+                className="tp-btn tp-btn-primary"
+                style={{ width: "100%", justifyContent: "center", padding: "12px 16px" }}>
+                <CheckCircle2 size={16}/> Marquer comme encaissée
+              </button>
+              <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 6, textAlign: "center" }}>
+                Pour les paiements espèces, chèque ou virement hors-Stripe.
               </div>
-              <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.4, fontFamily: "monospace" }}>{invoice.fingerprint}</div>
-              <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 6 }}>Authentifiable en cas de contrôle fiscal</div>
             </div>
-          </div>
+          )}
+          {invoice.status === "paid" && (
+            <div style={{ marginTop: 18, textAlign: "center" }}>
+              <button
+                onClick={async () => {
+                  if (!window.confirm("Repasser cette facture en « en attente » ?")) return;
+                  try {
+                    await sbMarkInvoiceUnpaid(invoice.id);
+                    alert("Facture repassée en attente.");
+                    onBack();
+                  } catch (e) {
+                    alert("Erreur : " + (e?.message || e));
+                  }
+                }}
+                style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+                Annuler l'encaissement
+              </button>
+            </div>
+          )}
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>

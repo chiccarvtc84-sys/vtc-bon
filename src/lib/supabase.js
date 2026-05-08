@@ -687,6 +687,49 @@ export async function createCheckoutSession(packageId) {
 }
 
 /**
+ * Marque une facture comme encaissée (status: 'paid', paid_at: now()).
+ * Utile pour les paiements en espèces/chèque/virement encaissés hors-Stripe :
+ * le chauffeur passe manuellement la facture en "Payée" depuis l'app.
+ * RLS garantit qu'on ne peut update que sa propre facture.
+ *
+ * @param {string} invoiceId
+ * @returns {Promise<object>} la facture mise à jour
+ */
+export async function markInvoicePaid(invoiceId) {
+  if (!invoiceId) throw new Error('invoiceId requis');
+  const { data, error } = await supabase
+    .from('invoices')
+    .update({
+      status: 'paid',
+      paid_at: new Date().toISOString(),
+    })
+    .eq('id', invoiceId)
+    .select()
+    .single();
+  if (error) throw new Error(`Échec marquage facture : ${error.message}`);
+  return data;
+}
+
+/**
+ * Repasse une facture en "en attente" (cas où on s'est trompé en marquant
+ * payée prématurément). Symétrique de markInvoicePaid().
+ */
+export async function markInvoiceUnpaid(invoiceId) {
+  if (!invoiceId) throw new Error('invoiceId requis');
+  const { data, error } = await supabase
+    .from('invoices')
+    .update({
+      status: 'pending',
+      paid_at: null,
+    })
+    .eq('id', invoiceId)
+    .select()
+    .single();
+  if (error) throw new Error(`Échec marquage facture : ${error.message}`);
+  return data;
+}
+
+/**
  * Crée un Stripe PaymentIntent pour le flow Apple Pay natif.
  *
  * Différent de createCheckoutSession : on ne renvoie PAS d'URL Stripe à
