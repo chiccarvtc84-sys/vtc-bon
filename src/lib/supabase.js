@@ -723,7 +723,12 @@ export async function markInvoicePaid(invoiceId) {
     p_status: 'paid',
   });
   if (error) throw new Error(`Échec marquage facture : ${error.message}`);
-  return data === true;
+  // Le RPC renvoie TRUE si OK. Si data ≠ true, c'est qu'un fallback s'est
+  // exécuté sans erreur formelle — on remonte le souci au caller pour
+  // qu'il évite de mentir à l'utilisateur ("Encaissé !") alors que la DB
+  // n'a pas été mise à jour.
+  if (data !== true) throw new Error('Le serveur n\'a pas confirmé la mise à jour. Réessayez.');
+  return true;
 }
 
 /**
@@ -737,7 +742,8 @@ export async function markInvoiceUnpaid(invoiceId) {
     p_status: 'pending',
   });
   if (error) throw new Error(`Échec marquage facture : ${error.message}`);
-  return data === true;
+  if (data !== true) throw new Error('Le serveur n\'a pas confirmé la mise à jour. Réessayez.');
+  return true;
 }
 
 /**
