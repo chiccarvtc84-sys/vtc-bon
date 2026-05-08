@@ -679,103 +679,121 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
   const weekRevenue = invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.amount, 0);
 
   return (
-    <div className="tp-scroll tp-fade-in" style={{ display: "flex", flexDirection: "column" }}>
-      <div style={{ padding: "10px 20px 4px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-          <div>
-            <div style={{ fontSize: 12, color: "var(--text-dim)", fontWeight: 500 }}>
-              {today.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}
+    /* Layout type "app native" (Uber/Deliveroo) :
+       - Header (greeting + tokens + stats + bouton vocal + actions rapides)
+         FIXE en haut → ne bouge jamais.
+       - Liste des prochaines courses + carte Conformité = SEULE zone
+         scrollable verticalement.
+       - BottomNav reste fixe (gérée par le parent App). */
+    <div className="tp-fade-in" style={{
+      flex: 1,
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",                       // bloque le scroll global du screen
+      paddingTop: "env(safe-area-inset-top)",   // sous la status bar iPhone
+      minHeight: 0,
+    }}>
+      {/* ─── HEADER FIXE ─────────────────────────────────────────── */}
+      <div style={{ flexShrink: 0, background: "var(--bg-gradient)" }}>
+        <div style={{ padding: "10px 20px 4px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 12, color: "var(--text-dim)", fontWeight: 500 }}>
+                {today.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}
+              </div>
+              <h1 className="tp-serif" style={{ fontSize: 32, fontWeight: 600, margin: "6px 0 0", lineHeight: 1.1 }}>
+                Bonjour,<br/>
+                <span style={{ color: "var(--accent)" }}>{currentUser?.name?.split(' ')[0] || DRIVER_PROFILE.firstName}</span>.
+              </h1>
             </div>
-            <h1 className="tp-serif" style={{ fontSize: 32, fontWeight: 600, margin: "6px 0 0", lineHeight: 1.1 }}>
-              Bonjour,<br/>
-              <span style={{ color: "var(--accent)" }}>{currentUser?.name?.split(' ')[0] || DRIVER_PROFILE.firstName}</span>.
-            </h1>
+            <TokenBadge balance={tokenBalance} onClick={() => onGoTab("tokens")}/>
           </div>
-          <TokenBadge balance={tokenBalance} onClick={() => onGoTab("tokens")}/>
         </div>
-      </div>
 
-      {isGuest && <GuestBanner onSignup={onPromptSignup}/>}
+        {isGuest && <GuestBanner onSignup={onPromptSignup}/>}
 
-      <div style={{ padding: "20px 20px 0", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <div className="tp-card-elevated" style={{ padding: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-dim)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            <Calendar size={12} /> Aujourd'hui
-          </div>
-          <div className="tp-serif" style={{ fontSize: 28, fontWeight: 600, marginTop: 4 }}>{todayBookings.length}</div>
-          <div style={{ fontSize: 12, color: "var(--text-dim)" }}>course{todayBookings.length > 1 ? "s" : ""} prévue{todayBookings.length > 1 ? "s" : ""}</div>
-        </div>
-        <div className="tp-card-elevated" style={{ padding: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-dim)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            <TrendingUp size={12} /> CA encaissé
-          </div>
-          <div className="tp-serif" style={{ fontSize: 28, fontWeight: 600, marginTop: 4, color: "var(--accent)" }}>{eur(weekRevenue)}</div>
-          <div style={{ fontSize: 12, color: "var(--text-dim)" }}>cette semaine</div>
-        </div>
-      </div>
-
-      {/* ─── Stats du mois — vue rapide pour déclaration URSSAF/TVA ─── */}
-      <div style={{ padding: "12px 20px 0" }}>
-        <button onClick={onQuickVoice} className="tp-card-elevated" style={{
-          width: "100%", padding: 20, display: "flex", alignItems: "center", gap: 14,
-          cursor: "pointer", textAlign: "left", border: "1px solid var(--accent-ring)",
-          background: "linear-gradient(135deg, rgba(244,185,66,0.15), rgba(244,185,66,0.02))",
-        }}>
-          <div style={{ width: 48, height: 48, borderRadius: 13, background: "var(--accent)", color: "#0B0B0D", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 4px 12px -4px rgba(244,185,66,0.5)" }}>
-            <Mic size={24} strokeWidth={2.2}/>
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.01em" }}>Nouveau bon vocal</div>
-            <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 3 }}>
-              Dictez votre course · <span style={{ color: "var(--accent)", fontWeight: 600 }}>1 crédit</span>
+        <div style={{ padding: "16px 20px 0", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="tp-card-elevated" style={{ padding: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-dim)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              <Calendar size={12} /> Aujourd'hui
             </div>
+            <div className="tp-serif" style={{ fontSize: 26, fontWeight: 600, marginTop: 4 }}>{todayBookings.length}</div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>course{todayBookings.length > 1 ? "s" : ""} prévue{todayBookings.length > 1 ? "s" : ""}</div>
           </div>
-          <Sparkles size={18} style={{ color: "var(--accent)" }}/>
-        </button>
-      </div>
+          <div className="tp-card-elevated" style={{ padding: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-dim)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              <TrendingUp size={12} /> CA encaissé
+            </div>
+            <div className="tp-serif" style={{ fontSize: 26, fontWeight: 600, marginTop: 4, color: "var(--accent)" }}>{eur(weekRevenue)}</div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>cette semaine</div>
+          </div>
+        </div>
 
-      <div style={{ padding: "12px 20px 0", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-        {[
-          { icon: Plus, label: "Manuel", onClick: onNewBooking },
-          { icon: Car, label: "Courses", onClick: () => onGoTab("bookings") },
-          { icon: Receipt, label: "Factures", onClick: () => onGoTab("invoices") },
-          { icon: Calendar, label: "Agenda", onClick: () => onGoTab("bookings") },
-        ].map((a, i) => (
-          <button key={i} onClick={a.onClick} className="tp-card" style={{ padding: "14px 4px", display: "flex", flexDirection: "column", alignItems: "center", gap: 7, cursor: "pointer", background: "var(--surface)" }}>
-            <a.icon size={20} style={{ color: "var(--accent)" }}/>
-            <span style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.01em" }}>{a.label}</span>
+        <div style={{ padding: "12px 20px 0" }}>
+          <button onClick={onQuickVoice} className="tp-card-elevated" style={{
+            width: "100%", padding: 16, display: "flex", alignItems: "center", gap: 14,
+            cursor: "pointer", textAlign: "left", border: "1px solid var(--accent-ring)",
+            background: "linear-gradient(135deg, rgba(244,185,66,0.15), rgba(244,185,66,0.02))",
+          }}>
+            <div style={{ width: 44, height: 44, borderRadius: 12, background: "var(--accent)", color: "#0B0B0D", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 4px 12px -4px rgba(244,185,66,0.5)" }}>
+              <Mic size={22} strokeWidth={2.2}/>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.01em" }}>Nouveau bon vocal</div>
+              <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>
+                Dictez votre course · <span style={{ color: "var(--accent)", fontWeight: 600 }}>1 crédit</span>
+              </div>
+            </div>
+            <Sparkles size={18} style={{ color: "var(--accent)" }}/>
           </button>
-        ))}
+        </div>
+
+        <div style={{ padding: "10px 20px 16px", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+          {[
+            { icon: Plus, label: "Manuel", onClick: onNewBooking },
+            { icon: Car, label: "Courses", onClick: () => onGoTab("bookings") },
+            { icon: Receipt, label: "Factures", onClick: () => onGoTab("invoices") },
+            { icon: Calendar, label: "Agenda", onClick: () => onGoTab("bookings") },
+          ].map((a, i) => (
+            <button key={i} onClick={a.onClick} className="tp-card" style={{ padding: "12px 4px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer", background: "var(--surface)" }}>
+              <a.icon size={20} style={{ color: "var(--accent)" }}/>
+              <span style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.01em" }}>{a.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div style={{ padding: "20px 20px 0" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+      {/* ─── ZONE SCROLLABLE INDÉPENDANTE ────────────────────────── */}
+      <div style={{
+        flex: 1,
+        overflowY: "auto",
+        WebkitOverflowScrolling: "touch",
+        overscrollBehavior: "contain",
+        padding: "0 20px calc(110px + env(safe-area-inset-bottom)) 20px",
+        minHeight: 0,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingTop: 4 }}>
           <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600 }}>Prochaines courses</div>
           <button onClick={() => onGoTab("bookings")} style={{ fontSize: 12, color: "var(--accent)", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
             Tout voir <ArrowUpRight size={12}/>
           </button>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {/* Affiche les 6 prochaines courses ; au-delà l'utilisateur clique
-              "Tout voir" pour ouvrir l'écran "Mes courses" complet. La page
-              Accueil est désormais scrollable verticalement → on peut faire
-              défiler pour atteindre la fin de la liste. */}
-          {bookings.slice(0, 6).map(b => <BookingCard key={b.id} booking={b} onClick={() => onOpenBooking(b)} />)}
+          {bookings.slice(0, 20).map(b => <BookingCard key={b.id} booking={b} onClick={() => onOpenBooking(b)} />)}
         </div>
-      </div>
 
-      {/* Carte Conformité en flux normal après la liste des courses,
-          avec un espace de 18px qui aère le layout sans coller à la nav. */}
-      <div style={{ padding: "18px 20px 0" }}>
-        <div className="tp-card" style={{ padding: 16, display: "flex", gap: 14, alignItems: "center", background: "linear-gradient(135deg, rgba(16,185,129,0.10), rgba(16,185,129,0.02))", border: "1px solid rgba(16,185,129,0.25)" }}>
-          <div style={{ width: 42, height: 42, borderRadius: 12, background: "var(--success-soft)", color: "var(--success)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <Shield size={20}/>
+        {/* Carte Conformité en bas du scroll, après toutes les courses */}
+        <div style={{ marginTop: 16 }}>
+          <div className="tp-card" style={{ padding: 14, display: "flex", gap: 12, alignItems: "center", background: "linear-gradient(135deg, rgba(16,185,129,0.10), rgba(16,185,129,0.02))", border: "1px solid rgba(16,185,129,0.25)" }}>
+            <div style={{ width: 38, height: 38, borderRadius: 11, background: "var(--success-soft)", color: "var(--success)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <Shield size={18}/>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: "-0.01em" }}>Conformité décret 2017-483</div>
+              <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2, lineHeight: 1.4 }}>Tous vos bons comportent les mentions obligatoires</div>
+            </div>
+            <CheckCircle2 size={18} style={{ color: "var(--success)", flexShrink: 0 }}/>
           </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: "-0.01em" }}>Conformité décret 2017-483</div>
-            <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 3, lineHeight: 1.4 }}>Tous vos bons comportent les mentions obligatoires</div>
-          </div>
-          <CheckCircle2 size={20} style={{ color: "var(--success)", flexShrink: 0 }}/>
         </div>
       </div>
     </div>
@@ -1866,43 +1884,66 @@ function InvoicesScreen({ invoices, bookings, tokenBalance, onOpenInvoice, onGoT
   const filtered = invoices.filter(i => !search || i.customerName.toLowerCase().includes(search.toLowerCase()) || i.number.includes(search));
 
   return (
-    <div className="tp-scroll tp-fade-in">
-      <TopBar title="Factures" subtitle={`Numérotation chronologique garantie`}
-        rightAction={<TokenBadge balance={tokenBalance} onClick={() => onGoTab("tokens")} compact/>}/>
+    /* Layout type "app native" : header (TopBar + stats + recherche +
+       export CSV) FIXE, liste des factures = SEULE zone scrollable. */
+    <div className="tp-fade-in" style={{
+      flex: 1,
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",
+      paddingTop: "env(safe-area-inset-top)",
+      minHeight: 0,
+    }}>
+      {/* ─── HEADER FIXE ─────────────────────────────────────────── */}
+      <div style={{ flexShrink: 0, background: "var(--bg-gradient)", paddingBottom: 14 }}>
+        <TopBar title="Factures" subtitle={`Numérotation chronologique garantie`}
+          rightAction={<TokenBadge balance={tokenBalance} onClick={() => onGoTab("tokens")} compact/>}/>
 
-      <div style={{ padding: "0 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <div className="tp-card-elevated" style={{ padding: 14 }}>
-          <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Encaissé</div>
-          <div className="tp-serif" style={{ fontSize: 22, fontWeight: 600, marginTop: 4, color: "var(--success)" }}>{eur(totalPaid)}</div>
+        <div style={{ padding: "0 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="tp-card-elevated" style={{ padding: 14 }}>
+            <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Encaissé</div>
+            <div className="tp-serif" style={{ fontSize: 22, fontWeight: 600, marginTop: 4, color: "var(--success)" }}>{eur(totalPaid)}</div>
+          </div>
+          <div className="tp-card-elevated" style={{ padding: 14 }}>
+            <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>En attente</div>
+            <div className="tp-serif" style={{ fontSize: 22, fontWeight: 600, marginTop: 4, color: "var(--warn)" }}>{eur(totalPending)}</div>
+          </div>
         </div>
-        <div className="tp-card-elevated" style={{ padding: 14 }}>
-          <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>En attente</div>
-          <div className="tp-serif" style={{ fontSize: 22, fontWeight: 600, marginTop: 4, color: "var(--warn)" }}>{eur(totalPending)}</div>
+
+        <div style={{ padding: "14px 20px 0" }}>
+          <div style={{ position: "relative" }}>
+            <Search size={15} style={{ position: "absolute", left: 14, top: 13, color: "var(--muted)" }}/>
+            <input className="tp-input" style={{ paddingLeft: 38 }} placeholder="Rechercher N° ou client..." value={search} onChange={e => setSearch(e.target.value)}/>
+          </div>
+        </div>
+
+        {/* Export comptable mensuel — utile pour le comptable du chauffeur */}
+        <div style={{ padding: "12px 20px 0" }}>
+          <button onClick={() => {
+            const result = exportInvoicesCsv(invoices, bookings, new Date());
+            if (result.count === 0) {
+              alert("Aucune facture sur le mois en cours.");
+            } else {
+              alert(`✅ Export CSV téléchargé : ${result.count} facture(s), ${eur(result.totalTTC)} TTC.\n\nFichier prêt à être envoyé à votre comptable.`);
+            }
+          }} className="tp-btn tp-btn-ghost" style={{ width: "100%", justifyContent: "center", fontSize: 13 }}>
+            <Download size={15}/> Exporter le mois en CSV (pour comptable)
+          </button>
         </div>
       </div>
 
-      <div style={{ padding: "14px 20px 0" }}>
-        <div style={{ position: "relative" }}>
-          <Search size={15} style={{ position: "absolute", left: 14, top: 13, color: "var(--muted)" }}/>
-          <input className="tp-input" style={{ paddingLeft: 38 }} placeholder="Rechercher N° ou client..." value={search} onChange={e => setSearch(e.target.value)}/>
-        </div>
-      </div>
-
-      {/* Export comptable mensuel — utile pour le comptable du chauffeur */}
-      <div style={{ padding: "14px 20px 0" }}>
-        <button onClick={() => {
-          const result = exportInvoicesCsv(invoices, bookings, new Date());
-          if (result.count === 0) {
-            alert("Aucune facture sur le mois en cours.");
-          } else {
-            alert(`✅ Export CSV téléchargé : ${result.count} facture(s), ${eur(result.totalTTC)} TTC.\n\nFichier prêt à être envoyé à votre comptable.`);
-          }
-        }} className="tp-btn tp-btn-ghost" style={{ width: "100%", justifyContent: "center", fontSize: 13 }}>
-          <Download size={15}/> Exporter le mois en CSV (pour comptable)
-        </button>
-      </div>
-
-      <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+      {/* ─── LISTE FACTURES SCROLLABLE INDÉPENDAMMENT ────────────── */}
+      <div style={{
+        flex: 1,
+        overflowY: "auto",
+        WebkitOverflowScrolling: "touch",
+        overscrollBehavior: "contain",
+        padding: "14px 20px calc(110px + env(safe-area-inset-bottom)) 20px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        minHeight: 0,
+      }}>
         {filtered.map(inv => (
           <button key={inv.id} onClick={() => onOpenInvoice(inv)} className="tp-card"
             style={{ padding: 14, textAlign: "left", cursor: "pointer", background: "var(--surface)", display: "flex", gap: 12, alignItems: "center" }}>
