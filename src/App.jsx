@@ -2122,19 +2122,34 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
 
   // SMS — limitation OS : le schéma `sms:` ne peut PAS attacher de fichier.
   // Solution : on génère le PDF + on ouvre la feuille de partage iOS native,
-  // l'utilisateur tape "Messages" dans la feuille → le PDF est attaché en
-  // pièce jointe MMS/iMessage automatiquement. Beaucoup plus fiable que
-  // l'ancien `openSms` qui demandait au destinataire de "répondre pour
-  // recevoir le PDF" (jamais fait en pratique).
-  const onSms = async () => {
+  // ─── Envoi WhatsApp ────────────────────────────────────────────────
+  // Stratégie : sur mobile, on tente d'abord la feuille de partage iOS
+  // qui propose WhatsApp ET attache le PDF en document. C'est le seul
+  // chemin qui permet d'envoyer le PDF en pièce jointe — le deep link
+  // wa.me/?text=... ne supporte PAS les fichiers, juste un texte.
+  //
+  // Si la feuille de partage est annulée OU si on est sur web, on
+  // bascule sur le deep link wa.me qui ouvre WhatsApp avec le texte
+  // prérempli (sans PDF, mais l'utilisateur peut joindre le PDF
+  // téléchargé manuellement depuis WhatsApp).
+  const onWhatsApp = async () => {
+    const messageText = `Bonjour, voici votre facture ${invoice.number} d'un montant de ${eur(invoice.amount)} pour la course du ${prestationDate}.\n\nMerci de votre confiance.\n— TrajetPro`;
     try {
       const blob = await buildInvoicePdf(invoice, booking, realProfile, invoiceSettings);
-      await sharePdf(blob, filename, {
+      const result = await sharePdf(blob, filename, {
         title: `Facture ${invoice.number}`,
-        text: `Bonjour, voici votre facture ${invoice.number} (${eur(invoice.amount)}) pour la course du ${prestationDate}. — TrajetPro`,
+        text: messageText,
       });
+      // Si le user a annulé OU si la feuille de partage n'est pas dispo
+      // (web pur), on tente le deep link wa.me en fallback.
+      if (!result?.ok || result?.downloaded) {
+        const waUrl = `https://wa.me/?text=${encodeURIComponent(messageText)}`;
+        window.open(waUrl, '_blank');
+      }
     } catch (e) {
-      alert("Erreur lors de l'envoi : " + (e?.message || e));
+      // En cas d'échec sharePdf, fallback wa.me direct
+      const waUrl = `https://wa.me/?text=${encodeURIComponent(messageText)}`;
+      window.open(waUrl, '_blank');
     }
   };
 
@@ -2311,7 +2326,9 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
           <button onClick={onShareInvoice} className="tp-btn tp-btn-primary"><Send size={15}/> Envoyer (PDF)</button>
           <button onClick={onShareLink} className="tp-btn tp-btn-ghost"><Share2 size={15}/> Partager texte</button>
           <button onClick={onEmail} className="tp-btn tp-btn-ghost"><Mail size={15}/> Email</button>
-          <button onClick={onSms} className="tp-btn tp-btn-ghost"><MessageSquare size={15}/> SMS</button>
+          <button onClick={onWhatsApp} className="tp-btn tp-btn-ghost" style={{ color: "#25D366" }}>
+            <MessageCircle size={15}/> WhatsApp
+          </button>
         </div>
       </div>
     </div>
@@ -2859,7 +2876,9 @@ function PurchaseDetailModal({ open, purchase, onClose }) {
             <button className="tp-btn tp-btn-primary"><Mail size={15}/> Envoyer par email</button>
             <button className="tp-btn tp-btn-ghost"><Download size={15}/> Télécharger</button>
             <button className="tp-btn tp-btn-ghost"><Share2 size={15}/> Partager</button>
-            <button className="tp-btn tp-btn-ghost"><MessageSquare size={15}/> SMS</button>
+            <button className="tp-btn tp-btn-ghost" style={{ color: "#25D366" }}>
+              <MessageCircle size={15}/> WhatsApp
+            </button>
           </div>
         </div>
       </div>

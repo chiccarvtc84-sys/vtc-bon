@@ -704,24 +704,26 @@ export async function createCheckoutSession(packageId) {
  * Marque une facture comme encaissée (status: 'paid', paid_at: now()).
  * Utile pour les paiements en espèces/chèque/virement encaissés hors-Stripe :
  * le chauffeur passe manuellement la facture en "Payée" depuis l'app.
- * RLS garantit qu'on ne peut update que sa propre facture.
+ *
+ * Implémentation : passe par le RPC SECURITY DEFINER `update_invoice_status`
+ * qui ne permet de modifier QUE les colonnes status + paid_at (les autres
+ * colonnes — numéro chrono, montants — restent immuables pour conformité
+ * fiscale CGI). Le RPC vérifie auth.uid() == invoice.user_id.
+ *
+ * 🐛 Auparavant on faisait un UPDATE direct sur la table mais il n'y a pas
+ * de policy RLS UPDATE → erreur "Cannot coerce to single JSON object".
  *
  * @param {string} invoiceId
- * @returns {Promise<object>} la facture mise à jour
+ * @returns {Promise<boolean>} true si la mise à jour a réussi
  */
 export async function markInvoicePaid(invoiceId) {
   if (!invoiceId) throw new Error('invoiceId requis');
-  const { data, error } = await supabase
-    .from('invoices')
-    .update({
-      status: 'paid',
-      paid_at: new Date().toISOString(),
-    })
-    .eq('id', invoiceId)
-    .select()
-    .single();
+  const { data, error } = await supabase.rpc('update_invoice_status', {
+    p_invoice_id: invoiceId,
+    p_status: 'paid',
+  });
   if (error) throw new Error(`Échec marquage facture : ${error.message}`);
-  return data;
+  return data === true;
 }
 
 /**
@@ -730,17 +732,12 @@ export async function markInvoicePaid(invoiceId) {
  */
 export async function markInvoiceUnpaid(invoiceId) {
   if (!invoiceId) throw new Error('invoiceId requis');
-  const { data, error } = await supabase
-    .from('invoices')
-    .update({
-      status: 'pending',
-      paid_at: null,
-    })
-    .eq('id', invoiceId)
-    .select()
-    .single();
+  const { data, error } = await supabase.rpc('update_invoice_status', {
+    p_invoice_id: invoiceId,
+    p_status: 'pending',
+  });
   if (error) throw new Error(`Échec marquage facture : ${error.message}`);
-  return data;
+  return data === true;
 }
 
 /**
