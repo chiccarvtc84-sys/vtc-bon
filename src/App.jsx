@@ -2959,6 +2959,32 @@ function InsufficientModal({ open, onClose, onBuy, action, currentBalance }) {
 // véhicule, IBAN, n° TVA intra. Le SIRET et l'email ne sont PAS éditables
 // ici (le SIRET est unique anti-fraude → demande de re-vérif INSEE ; l'email
 // passe par un flow auth séparé).
+/* Badge de validation : ✅ vert / ❌ rouge / ⏳ doré (en cours) / rien (idle).
+   Utilisé à côté du label SIRET et VTC dans EditProfileModal pour donner
+   un retour visuel immédiat pendant la saisie. */
+function ValidationBadge({ state }) {
+  if (!state || state.status === 'idle') return null;
+  if (state.status === 'checking') {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--accent)', fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>
+        <Loader2 size={11} style={{ animation: 'tp-spin 1s linear infinite' }}/> Vérification…
+      </span>
+    );
+  }
+  if (state.status === 'valid') {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--success)', fontWeight: 700, textTransform: 'none', letterSpacing: 0 }}>
+        <CheckCircle2 size={11}/> Vérifié
+      </span>
+    );
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--error)', fontWeight: 700, textTransform: 'none', letterSpacing: 0 }}>
+      <AlertCircle size={11}/> Invalide
+    </span>
+  );
+}
+
 function EditProfileModal({ open, currentUser, onClose, onSave }) {
   const [form, setForm] = useState({
     name: "", phone: "", email: "", siret: "", companyName: "", evtcNumber: "",
@@ -2971,6 +2997,11 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
   // l'envoi d'un mail de confirmation Supabase (le profil est sauvegardé,
   // mais le nouveau mail n'est validé qu'après clic sur le lien Supabase).
   const [pendingEmailNotice, setPendingEmailNotice] = useState("");
+  // Validation automatique SIRET (INSEE) et carte VTC (regex format).
+  //   'idle' | 'checking' | 'valid' | 'invalid' (+ reason)
+  const [siretValidation, setSiretValidation] = useState({ status: 'idle', reason: '' });
+  const [vtcValidation, setVtcValidation] = useState({ status: 'idle', reason: '' });
+
 
   // Pré-remplir avec les valeurs actuelles à chaque ouverture
   useEffect(() => {
@@ -2991,10 +3022,78 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
       setError("");
       setPendingEmailNotice("");
       setLoading(false);
+      // Init des validations selon le statut connu en base
+      setSiretValidation({
+        status: currentUser.siretVerified ? 'valid' : 'idle',
+        reason: '',
+      });
+      setVtcValidation({ status: 'idle', reason: '' });
     }
   }, [open, currentUser]);
 
   const update = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  // ─── Validation automatique SIRET (debounced 700ms) ──────────────────
+  // Quand l'utilisateur tape ou modifie son SIRET, on attend 700ms après
+  // sa dernière frappe puis on appelle l'Edge Function verify-siret
+  // (API INSEE). Ça évite de spammer l'API à chaque keystroke.
+  useEffect(() => {
+    if (!open) return;
+    const cleanSiret = form.siret.replace(/\s/g, '');
+    if (cleanSiret.length === 0) {
+      setSiretValidation({ status: 'idle', reason: '' });
+      return;
+    }
+    if (!/^\d{14}$/.test(cleanSiret)) {
+      setSiretValidation({ status: 'invalid', reason: 'Doit contenir exactement 14 chiffres.' });
+      return;
+    }
+    // Si la valeur n'a pas changé depuis le dernier check OK, skip l'appel API
+    if (cleanSiret === (currentUser?.siret || '').replace(/\s/g, '') && currentUser?.siretVerified) {
+      setSiretValidation({ status: 'valid', reason: '' });
+      return;
+    }
+    setSiretValidation({ status: 'checking', reason: '' });
+    const timer = setTimeout(async () => {
+      try {
+        const result = await sbVerifySiret(cleanSiret);
+        if (result?.valid) {
+          setSiretValidation({ status: 'valid', reason: '' });
+        } else {
+          setSiretValidation({
+            status: 'invalid',
+            reason: result?.reason || "SIRET non reconnu par l'INSEE.",
+          });
+        }
+      } catch (e) {
+        setSiretValidation({ status: 'invalid', reason: e?.message || 'Erreur INSEE.' });
+      }
+    }, 700);
+    return () => clearTimeout(timer);
+  }, [form.siret, open, currentUser]);
+
+  // ─── Validation automatique carte VTC (format) ────────────────────────
+  // Pas d'API publique pour vérifier qu'une carte VTC existe vraiment dans
+  // le registre VTC du Ministère de l'Intérieur. On valide le format :
+  //   EVTC + département (2-3 chiffres) + année (2 chiffres) + numéro (4-7 chiffres)
+  //   Ex: EVTC084220001  (Vaucluse, 2022, n°0001)
+  useEffect(() => {
+    if (!open) return;
+    const v = form.evtcNumber.trim().toUpperCase();
+    if (v.length === 0) {
+      setVtcValidation({ status: 'idle', reason: '' });
+      return;
+    }
+    // Regex : "EVTC" + 9-12 chiffres (département + année + numéro)
+    if (/^EVTC\d{9,12}$/.test(v)) {
+      setVtcValidation({ status: 'valid', reason: '' });
+    } else {
+      setVtcValidation({
+        status: 'invalid',
+        reason: 'Format attendu : EVTC suivi de 9 à 12 chiffres (ex: EVTC084220001).',
+      });
+    }
+  }, [form.evtcNumber, open]);
 
   const handleSubmit = async () => {
     setError("");
@@ -3031,6 +3130,18 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
         iban: form.iban.replace(/\s/g, "").toUpperCase() || null,
         vat_intra: form.vatIntra.trim().toUpperCase() || null,
       });
+
+      // 1bis. Si le SIRET a été validé pendant la saisie (badge vert),
+      //       on persiste siret_verified=true via le RPC dédié — comme
+      //       ça le statut est conservé après reload.
+      if (siretValidation.status === 'valid' && cleanSiret) {
+        try {
+          await sbMarkSiretVerified(currentUser.id);
+        } catch (e) {
+          console.warn('[EditProfile] mark_siret_verified failed:', e?.message);
+          // Pas bloquant : la sauvegarde principale a déjà réussi.
+        }
+      }
 
       // 2. Si l'email a changé, déclencher le flow Supabase Auth :
       //    supabase.auth.updateUser envoie automatiquement un mail de
@@ -3090,8 +3201,32 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
           </div>
 
           <div style={fieldStyle}>
-            <div style={labelStyle}>SIRET (14 chiffres)</div>
-            <input className="tp-input" value={form.siret} onChange={e => update("siret", e.target.value.replace(/[^0-9 ]/g, ""))} placeholder="ex. 123 456 789 00012" inputMode="numeric"/>
+            <div style={{ ...labelStyle, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span>SIRET (14 chiffres)</span>
+              <ValidationBadge state={siretValidation}/>
+            </div>
+            <input
+              className="tp-input"
+              value={form.siret}
+              onChange={e => update("siret", e.target.value.replace(/[^0-9 ]/g, ""))}
+              placeholder="ex. 123 456 789 00012"
+              inputMode="numeric"
+              style={{
+                borderColor: siretValidation.status === 'valid' ? "var(--success)" :
+                             siretValidation.status === 'invalid' ? "var(--error)" : undefined,
+              }}
+            />
+            {siretValidation.status === 'invalid' && siretValidation.reason && (
+              <div style={{ fontSize: 11, color: "var(--error)", marginTop: 4, display: "flex", alignItems: "flex-start", gap: 4 }}>
+                <AlertCircle size={11} style={{ flexShrink: 0, marginTop: 1 }}/>
+                <span>{siretValidation.reason}</span>
+              </div>
+            )}
+            {siretValidation.status === 'valid' && (
+              <div style={{ fontSize: 11, color: "var(--success)", marginTop: 4, display: "flex", alignItems: "center", gap: 4 }}>
+                <CheckCircle2 size={11}/> SIRET vérifié auprès de l'INSEE
+              </div>
+            )}
           </div>
 
           <div style={fieldStyle}>
@@ -3100,8 +3235,31 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
           </div>
 
           <div style={fieldStyle}>
-            <div style={labelStyle}>N° d'inscription VTC</div>
-            <input className="tp-input" value={form.evtcNumber} onChange={e => update("evtcNumber", e.target.value.toUpperCase())} placeholder="ex. EVTC013579246"/>
+            <div style={{ ...labelStyle, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span>N° d'inscription VTC</span>
+              <ValidationBadge state={vtcValidation}/>
+            </div>
+            <input
+              className="tp-input"
+              value={form.evtcNumber}
+              onChange={e => update("evtcNumber", e.target.value.toUpperCase())}
+              placeholder="ex. EVTC084220001"
+              style={{
+                borderColor: vtcValidation.status === 'valid' ? "var(--success)" :
+                             vtcValidation.status === 'invalid' ? "var(--error)" : undefined,
+              }}
+            />
+            {vtcValidation.status === 'invalid' && vtcValidation.reason && (
+              <div style={{ fontSize: 11, color: "var(--error)", marginTop: 4, display: "flex", alignItems: "flex-start", gap: 4 }}>
+                <AlertCircle size={11} style={{ flexShrink: 0, marginTop: 1 }}/>
+                <span>{vtcValidation.reason}</span>
+              </div>
+            )}
+            {vtcValidation.status === 'valid' && (
+              <div style={{ fontSize: 11, color: "var(--success)", marginTop: 4, display: "flex", alignItems: "center", gap: 4 }}>
+                <CheckCircle2 size={11}/> Format valide (vérification réelle par le ministère côté Préfecture)
+              </div>
+            )}
           </div>
 
           <div style={fieldStyle}>
@@ -3174,125 +3332,6 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
   );
 }
 
-/* -------------------------------------------------------------------------
-   PROFILE VERIFICATION STATUS — état des vérifications pro (SIRET / Email)
-   -------------------------------------------------------------------------
-   3 statuts par champ :
-     - ✅ vérifié    (badge vert, validé par INSEE / Supabase)
-     - ⏳ en attente (badge orange, bouton "Vérifier maintenant")
-     - ❌ refusé     (badge rouge, message + correctif)
-
-   Pour le SIRET : appelle l'Edge Function verify-siret (API INSEE) à la
-   demande, puis persiste via le RPC mark_siret_verified si OK.
-   Pour l'email : status auto via Supabase Auth.
-   Pour la carte VTC : pas d'API publique → "Soumettre pour vérification
-   manuelle" qui ouvre un mailto au support.
-   ------------------------------------------------------------------------- */
-function ProfileVerificationStatus({ currentUser }) {
-  const [siretStatus, setSiretStatus] = useState(
-    currentUser?.siretVerified ? 'verified' : (currentUser?.siret ? 'pending' : 'missing')
-  );
-  const [siretError, setSiretError] = useState('');
-  const [siretLoading, setSiretLoading] = useState(false);
-  const emailVerified = !!currentUser?.emailVerified;
-
-  const verifySiretNow = async () => {
-    if (!currentUser?.siret) {
-      setSiretError("Aucun SIRET renseigné. Modifiez votre profil pour l'ajouter.");
-      setSiretStatus('refused');
-      return;
-    }
-    setSiretLoading(true);
-    setSiretError('');
-    try {
-      const result = await sbVerifySiret(currentUser.siret);
-      if (result?.valid) {
-        await sbMarkSiretVerified(currentUser.id);
-        setSiretStatus('verified');
-      } else {
-        setSiretStatus('refused');
-        setSiretError(result?.reason || "SIRET non reconnu par l'INSEE.");
-      }
-    } catch (e) {
-      setSiretStatus('refused');
-      setSiretError(e?.message || "Erreur lors de la vérification SIRET.");
-    } finally {
-      setSiretLoading(false);
-    }
-  };
-
-  const Badge = ({ status }) => {
-    const config = {
-      verified: { bg: 'var(--success-soft)', color: 'var(--success)', icon: CheckCircle2, label: 'Vérifié' },
-      pending:  { bg: 'var(--warn-soft)',    color: 'var(--warn)',    icon: AlertCircle,  label: 'En attente' },
-      refused:  { bg: 'var(--error-soft)',   color: 'var(--error)',   icon: AlertCircle,  label: 'Refusé' },
-      missing:  { bg: 'var(--surface-2)',    color: 'var(--text-dim)',icon: AlertCircle,  label: 'Non renseigné' },
-    }[status] || { bg: 'var(--surface-2)', color: 'var(--text-dim)', icon: AlertCircle, label: status };
-    const Icon = config.icon;
-    return (
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4,
-        fontSize: 10, fontWeight: 700,
-        padding: '3px 8px', borderRadius: 999,
-        background: config.bg, color: config.color,
-        textTransform: 'uppercase', letterSpacing: '0.04em',
-      }}>
-        <Icon size={11}/> {config.label}
-      </span>
-    );
-  };
-
-  return (
-    <div style={{ padding: "0 20px 12px" }}>
-      <div className="tp-card" style={{ padding: 14, background: "var(--surface)" }}>
-        <div className="tp-label" style={{ marginBottom: 10 }}>Vérification professionnelle</div>
-
-        {/* Email */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Mail size={14} style={{ color: 'var(--accent)' }}/>
-            <div style={{ fontSize: 12, fontWeight: 600 }}>Email</div>
-          </div>
-          <Badge status={emailVerified ? 'verified' : 'pending'}/>
-        </div>
-
-        {/* SIRET */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <FileCheck size={14} style={{ color: 'var(--accent)' }}/>
-            <div style={{ fontSize: 12, fontWeight: 600 }}>SIRET (API INSEE)</div>
-          </div>
-          <Badge status={siretStatus}/>
-        </div>
-
-        {/* Bouton de re-vérification SIRET (visible si pas vérifié) */}
-        {siretStatus !== 'verified' && (
-          <>
-            {siretError && (
-              <div style={{ fontSize: 11, color: 'var(--error)', padding: '4px 0 8px', display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                <AlertCircle size={12} style={{ flexShrink: 0, marginTop: 1 }}/>
-                <span>{siretError}</span>
-              </div>
-            )}
-            <button onClick={verifySiretNow} disabled={siretLoading || !currentUser?.siret}
-              className="tp-btn tp-btn-ghost"
-              style={{ width: '100%', justifyContent: 'center', fontSize: 12, marginTop: 8 }}>
-              {siretLoading
-                ? <><Loader2 size={13} style={{ animation: 'tp-spin 1s linear infinite' }}/> Vérification…</>
-                : <><ShieldCheck size={13}/> Vérifier mon SIRET maintenant</>}
-            </button>
-          </>
-        )}
-
-        <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.5 }}>
-          <Info size={10} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4, color: 'var(--accent)' }}/>
-          La vérification de la carte VTC nécessite un examen manuel. Pour la
-          demander, envoyez une copie à <b>contact@trajetpro.fr</b>.
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, onPromptSignup, onEditProfile, biometricEnabled = false }) {
   const lowTokens = tokenBalance <= 3;
@@ -3469,11 +3508,6 @@ function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, 
             <ChevronRight size={14} style={{ color: "var(--muted)" }}/>
           </button>
         </div>
-      )}
-
-      {/* Statut de vérification professionnelle (SIRET + Email) */}
-      {!isGuest && currentUser && (
-        <ProfileVerificationStatus currentUser={currentUser}/>
       )}
 
       {!isGuest && onEditProfile && (
