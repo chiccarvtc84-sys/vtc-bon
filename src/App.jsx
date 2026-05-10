@@ -13,7 +13,7 @@ import {
   Lock, ShieldCheck, Copy, UserPlus, LogIn, Eye, EyeOff,
   Star, Award, Languages, Bell, Palette, Moon, Database,
   ChevronDown, BookOpen, MessageCircle, HandCoins, Globe,
-  Cloud
+  Cloud, Camera, User
 } from 'lucide-react';
 import {
   supabase,
@@ -41,6 +41,8 @@ import {
   verifySiret as sbVerifySiret,
   markSiretVerified as sbMarkSiretVerified,
   markEvtcVerified as sbMarkEvtcVerified,
+  uploadAvatar as sbUploadAvatar,
+  deleteAvatar as sbDeleteAvatar,
   isDisposableEmail as sbIsDisposableEmail,
   deleteMyAccount as sbDeleteMyAccount,
   signInWithApple as sbSignInWithApple,
@@ -2964,6 +2966,135 @@ function InsufficientModal({ open, onClose, onBuy, action, currentBalance }) {
 // véhicule, IBAN, n° TVA intra. Le SIRET et l'email ne sont PAS éditables
 // ici (le SIRET est unique anti-fraude → demande de re-vérif INSEE ; l'email
 // passe par un flow auth séparé).
+/* -------------------------------------------------------------------------
+   AVATAR PICKER — sélection / remplacement / suppression de la photo
+   -------------------------------------------------------------------------
+   Affiche l'avatar actuel (ou les initiales) au-dessus du formulaire avec
+   2 actions :
+     - "Choisir une photo" / "Remplacer" : <input type="file"> caché qui
+       déclenche le picker système iOS (Photo Library / Take Photo) ou
+       le file picker web sur PC.
+     - "Supprimer" : efface l'avatar Storage + remet avatar_url=null.
+
+   Upload immédiat (pas en attente du Save du formulaire) → l'utilisateur
+   voit le résultat tout de suite + l'avatar est synchronisé même s'il
+   ferme la modale sans enregistrer les autres champs.
+   ------------------------------------------------------------------------- */
+function AvatarPicker({ currentUser }) {
+  const fileInputRef = useRef(null);
+  const [localUrl, setLocalUrl] = useState(currentUser?.avatarUrl || null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const initials = (currentUser?.name || '?').split(' ').map(w => w[0]).join('').substring(0, 2);
+
+  const onFileChosen = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError('');
+    setLoading(true);
+    try {
+      const url = await sbUploadAvatar(currentUser.id, file);
+      setLocalUrl(url);
+      // Mutation locale du currentUser pour refléter l'avatar dans tout
+      // l'écran Profil (sans recharger la page). Le prochain loadUserData
+      // récupérera l'URL canonique depuis la DB.
+      currentUser.avatarUrl = url;
+    } catch (err) {
+      setError(err?.message || 'Erreur upload');
+    } finally {
+      setLoading(false);
+      // Reset l'input pour permettre de re-sélectionner le même fichier
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const onDelete = async () => {
+    if (!window.confirm('Supprimer votre photo de profil ?')) return;
+    setError('');
+    setLoading(true);
+    try {
+      await sbDeleteAvatar(currentUser.id);
+      setLocalUrl(null);
+      currentUser.avatarUrl = null;
+    } catch (err) {
+      setError(err?.message || 'Erreur suppression');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: 18, display: 'flex', alignItems: 'center', gap: 14 }}>
+      {/* Aperçu — photo si dispo, sinon initiales */}
+      {localUrl ? (
+        <img
+          src={localUrl}
+          alt="Avatar"
+          style={{
+            width: 72, height: 72, borderRadius: 18,
+            objectFit: 'cover',
+            border: '2px solid var(--accent-ring)',
+            flexShrink: 0,
+          }}
+        />
+      ) : (
+        <div style={{
+          width: 72, height: 72, borderRadius: 18,
+          background: 'linear-gradient(135deg, var(--accent), #8B6D2F)',
+          color: '#0B0B0D',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 26, fontWeight: 700, fontFamily: "'Fraunces', serif",
+          flexShrink: 0,
+        }}>
+          {initials}
+        </div>
+      )}
+
+      {/* Actions */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>
+          Photo de profil (max 2 Mo)
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={loading}
+            className="tp-btn tp-btn-ghost"
+            style={{ fontSize: 12, padding: '6px 10px' }}>
+            {loading ? <Loader2 size={12} style={{ animation: 'tp-spin 1s linear infinite' }}/> : <Camera size={12}/>}
+            {localUrl ? ' Remplacer' : ' Choisir une photo'}
+          </button>
+          {localUrl && !loading && (
+            <button
+              onClick={onDelete}
+              className="tp-btn tp-btn-ghost"
+              style={{ fontSize: 12, padding: '6px 10px', color: 'var(--error)' }}>
+              <Trash2 size={12}/> Supprimer
+            </button>
+          )}
+        </div>
+        {error && (
+          <div style={{ fontSize: 11, color: 'var(--error)', marginTop: 6 }}>
+            <AlertCircle size={11} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }}/>
+            {error}
+          </div>
+        )}
+      </div>
+
+      {/* Input file caché — accept image/* déclenche le picker système iOS
+          (Photo Library / Take Photo / Choose File) sur Capacitor WKWebView */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        onChange={onFileChosen}
+        style={{ display: 'none' }}
+      />
+    </div>
+  );
+}
+
 /* Badge de validation : ✅ vert / ❌ rouge / ⏳ doré (en cours) / rien (idle).
    Utilisé à côté du label SIRET et VTC dans EditProfileModal pour donner
    un retour visuel immédiat pendant la saisie. */
@@ -3203,6 +3334,9 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
             <button onClick={onClose} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }}><X size={18}/></button>
           </div>
 
+          {/* ─── Photo de profil ────────────────────────────────────── */}
+          <AvatarPicker currentUser={currentUser}/>
+
           <div style={fieldStyle}>
             <div style={labelStyle}>Nom complet</div>
             <input className="tp-input" value={form.name} onChange={e => update("name", e.target.value)} placeholder="Jean Dupont"/>
@@ -3405,14 +3539,32 @@ function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, 
 
       <div style={{ padding: "0 20px 16px" }}>
         <div className="tp-card-elevated" style={{ padding: 20, display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{
-            width: 60, height: 60, borderRadius: 16,
-            background: "linear-gradient(135deg, var(--accent), #8B6D2F)",
-            color: "#0B0B0D", display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 22, fontWeight: 700, fontFamily: "'Fraunces', serif",
-          }}>
-            {displayName.split(" ").map(w => w[0]).join("").substring(0,2)}
-          </div>
+          {/* Avatar : photo si avatarUrl, sinon initiales en fallback.
+              On utilise un cercle 60×60 avec object-fit:cover pour cropper
+              proprement les photos non-carrées. La bordure dorée subtile
+              donne un cadre premium sans éclipser la photo. */}
+          {currentUser?.avatarUrl ? (
+            <img
+              src={currentUser.avatarUrl}
+              alt={displayName}
+              style={{
+                width: 60, height: 60, borderRadius: 16,
+                objectFit: "cover",
+                border: "1.5px solid var(--accent-ring)",
+                flexShrink: 0,
+              }}
+            />
+          ) : (
+            <div style={{
+              width: 60, height: 60, borderRadius: 16,
+              background: "linear-gradient(135deg, var(--accent), #8B6D2F)",
+              color: "#0B0B0D", display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 22, fontWeight: 700, fontFamily: "'Fraunces', serif",
+              flexShrink: 0,
+            }}>
+              {displayName.split(" ").map(w => w[0]).join("").substring(0,2)}
+            </div>
+          )}
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600 }}>{displayName}</div>
             <div style={{ fontSize: 12, color: "var(--text-dim)" }}>{isGuest ? "Invité" : displayEmail}</div>
@@ -5404,6 +5556,7 @@ function profileFromDb(row) {
     emailVerified: !!row.email_verified,
     siretVerified: !!row.siret_verified,
     vtcLicenseVerified: !!row.evtc_verified,
+    avatarUrl: row.avatar_url || null,
     deviceFingerprint: row.device_fingerprint,
     deviceRegisteredAt: row.created_at,
     riskScore: row.risk_score || 0,

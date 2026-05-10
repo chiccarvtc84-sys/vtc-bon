@@ -458,6 +458,77 @@ export async function markEvtcVerified(userId) {
 }
 
 // ----------------------------------------------------------------------------
+// Avatar (photo de profil)
+// ----------------------------------------------------------------------------
+// Stockage : bucket Supabase Storage 'avatars', path '{user_id}/avatar.{ext}'.
+// RLS : tout le monde peut lire (URLs publiques utilisables direct dans <img>),
+// seul le propriétaire peut écrire dans son propre dossier.
+
+/**
+ * Upload une photo de profil pour l'utilisateur connecté.
+ * Remplace l'avatar existant si présent (upsert + cache-busting via ?v= timestamp).
+ *
+ * @param {string} userId    — UUID du user
+ * @param {File}   file       — fichier image (jpeg/png/webp/heic, max 2 MB)
+ * @returns {Promise<string>} — l'URL publique de l'avatar
+ */
+export async function uploadAvatar(userId, file) {
+  if (!userId) throw new Error('userId requis');
+  if (!file) throw new Error('Aucun fichier sélectionné');
+  if (file.size > 2 * 1024 * 1024) {
+    throw new Error('Image trop grande (max 2 Mo). Compressez-la avant.');
+  }
+  // Extension à partir du type MIME (plus fiable que file.name)
+  const mime = file.type || 'image/jpeg';
+  const ext = mime.includes('png') ? 'png'
+            : mime.includes('webp') ? 'webp'
+            : mime.includes('heic') || mime.includes('heif') ? 'heic'
+            : 'jpg';
+  const path = `${userId}/avatar.${ext}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from('avatars')
+    .upload(path, file, {
+      cacheControl: '3600',
+      upsert: true,
+      contentType: mime,
+    });
+  if (uploadError) throw new Error(`Upload échoué : ${uploadError.message}`);
+
+  // URL publique (bucket public). On ajoute un cache-bust pour que le navigateur
+  // recharge l'image après remplacement (sinon il garde l'ancienne en cache).
+  const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(path);
+  const finalUrl = `${publicUrl}?v=${Date.now()}`;
+
+  // Persister dans users.avatar_url
+  const { error: updateError } = await supabase
+    .from('users')
+    .update({ avatar_url: finalUrl })
+    .eq('id', userId);
+  if (updateError) throw new Error(`Mise à jour profil échouée : ${updateError.message}`);
+
+  return finalUrl;
+}
+
+/**
+ * Supprime la photo de profil (efface le fichier Storage + colonne avatar_url).
+ * Le user retombera sur l'affichage des initiales.
+ */
+export async function deleteAvatar(userId) {
+  if (!userId) throw new Error('userId requis');
+  // On tente de supprimer toutes les variantes (jpg/png/webp/heic) sans
+  // savoir laquelle est présente — Supabase ignore les fichiers inexistants.
+  const paths = ['jpg', 'png', 'webp', 'heic'].map(ext => `${userId}/avatar.${ext}`);
+  await supabase.storage.from('avatars').remove(paths);
+
+  const { error } = await supabase
+    .from('users')
+    .update({ avatar_url: null })
+    .eq('id', userId);
+  if (error) throw new Error(`Mise à jour profil échouée : ${error.message}`);
+}
+
+// ----------------------------------------------------------------------------
 // Bons de course (bookings)
 // ----------------------------------------------------------------------------
 
