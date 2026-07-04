@@ -91,9 +91,9 @@ select {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(244, 185, 66, 0.25);
+  background: rgba(120, 122, 130, 0.28);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(244, 185, 66, 0.4);
+  background: rgba(120, 122, 130, 0.45);
 }

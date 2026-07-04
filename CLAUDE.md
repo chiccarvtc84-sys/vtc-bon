@@ -108,13 +108,23 @@ Tout le code est livré. Les actions ci-dessous **ne peuvent pas être faites pa
 - **Bundle ID** : `com.trajetpro.app`
 - **Plugins Capacitor** : `app`, `network`, `preferences`, `local-notifications`
 
-## 🎨 Charte graphique (NE PAS DÉVIER)
+## 🎨 Charte graphique — « TrajetPro Clair » (refonte juillet 2026)
 
-- Fond : `#0B0B0D` (noir profond)
-- Doré principal : `#F4B942`
-- Polices : **Fraunces** (titres) + **Plus Jakarta Sans** (corps)
-- Style : minimaliste, premium, sombre
-- Variables CSS dans `src/index.css` (`--tp-bg`, `--tp-gold`, `--tp-text`, etc.)
+Refonte validée : passage d'un thème **sombre** à un thème **clair premium** inspiré de Planity / apps de transfert d'argent / apps map (fond papier, cartes blanches, grandes typographies, map + bottom-sheet). Le thème sombre reste disponible en option (Réglages).
+
+- **Défaut = CLAIR** (`data-theme="light"` posé dans `main.jsx` + `DEFAULT_PREFERENCES.theme="light"`). Le sombre ne s'applique que si l'utilisateur le choisit dans les Réglages.
+- Fond papier : `#F6F5F2` · surfaces cartes : `#FFFFFF` · encre (texte/boutons) : `#16171B`
+- **Accent = bleu cobalt** (remplace l'or, 2026-07-04, choix « app moderne »), décliné en 3 tons :
+  - `--accent` = `#2563EB` clair / `#3B82F6` sombre → **fonds, boutons, ligne d'itinéraire**
+  - `--accent-ink` = `#1D4ED8` clair / `#60A5FA` sombre → **texte bleu lisible** (⚠️ ne jamais utiliser `--accent` pour du texte : contraste insuffisant)
+  - `--accent-on` = `#FFFFFF` → **texte/icône posé SUR un fond `--accent`** (blanc sur bleu)
+- Validé / encaissé : vert `#12B76A` · Avertissement : ambre `#B7791F` (sémantique, pas la marque)
+- L'accent est entièrement **basculable** via 3 tokens : changer les 3 (`--accent`/`--accent-ink`/`--accent-on`) dans les 2 thèmes suffit à reskinner toute l'app.
+- Polices : **Fraunces** (titres, gros chiffres) + **Plus Jakarta Sans** (corps) — inchangées
+- **Source de vérité des tokens** : bloc `GlobalStyles` dans `src/App.jsx` (`:root` = sombre, `:root[data-theme="light"]` = clair). Le vieux `src/index.css` (`--tp-*`) est secondaire.
+- Composants clés : `.tp-card` (ombre douce en clair via `--shadow-card`), `--shadow-hero`, `--map-bg/--map-road/--map-block` (fond map ambiant `AmbientMap`).
+
+**Refonte écran par écran (en cours) :** ✅ Accueil (map + hero « prochaine course » + `NextCourseHero`/`AmbientMap`). ⏳ à faire : Courses, BookingForm (flow départ→arrivée), Factures, Jetons, Profil, etc. Garder toute la logique Supabase/Stripe intacte.
 
 ## 👤 Identité chauffeur (constante DRIVER_PROFILE)
 

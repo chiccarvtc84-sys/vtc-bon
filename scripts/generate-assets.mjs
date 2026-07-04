@@ -8,12 +8,13 @@
 // Lance via : npm run assets
 // (qui enchaîne ce script + npx capacitor-assets generate)
 //
-// Design : monogramme serif "TP" or sur fond noir profond + wordmark
-// "TrajetPro" sur le splash. Aux couleurs de la charte (`#0B0B0D` /
-// `#F4B942`). Pour un design définitif "store-grade", remplacer
-// directement les fichiers `assets/icon.png` et `assets/splash.png`
-// avec ceux d'un graphiste, puis lancer `npx capacitor-assets generate`
-// (sans repasser par ce script).
+// Design (refonte « TrajetPro Clair », 2026-07-04) : monogramme « V » formé
+// par un trajet (points départ/arrivée) blanc sur fond BLEU dégradé — le
+// logo de marque. Icône = fond bleu plein. Splash = même logo posé sur fond
+// papier clair + wordmark. Couleurs de la charte (`#2563EB` / papier
+// `#F6F5F2`). Pour un design définitif "store-grade", remplacer directement
+// les fichiers `assets/icon.png` et `assets/splash.png` puis lancer
+// `npx capacitor-assets generate` (sans repasser par ce script).
 // ============================================================================
 
 import sharp from 'sharp';
@@ -26,116 +27,145 @@ const ROOT = resolve(__dirname, '..');
 const ASSETS_DIR = resolve(ROOT, 'assets');
 
 const COLORS = {
-  bg: '#0B0B0D',
-  bgGradLight: '#1a1a22',
-  gold: '#F4B942',
-  goldDark: '#C99632',
-  goldLight: '#FFD27A',
-  text: '#F5F5F4',
-  textMuted: '#A8A29E',
+  blue: '#2563EB',
+  blueDark: '#0B3AA8',
+  paper: '#F6F5F2',
+  paperHi: '#FFFFFF',
+  darkBg: '#0B0B0D',
+  darkBgHi: '#171A22',
+  ink: '#16171B',
+  white: '#FFFFFF',
+  vLight: '#CFE0FF',
+  blueSoft: '#60A5FA',
+  mutedLight: '#6B6C73',
+  mutedDark: '#A8A29E',
 };
 
-// Police serif — librsvg (utilisé par sharp) ne charge pas Fraunces (pas
-// installé sur le système Windows par défaut), on retombe sur Georgia
-// qui donne un rendu serif très proche et élégant.
 const SERIF = 'Georgia, "Times New Roman", "DejaVu Serif", serif';
 const SANS = '"Helvetica Neue", Arial, "DejaVu Sans", sans-serif';
 
+// Fragment logo réutilisable : reprend EXACTEMENT le SVG de marque
+// (public/favicon.svg / composant AppLogo), positionné et mis à l'échelle.
+// `idbg`/`idv` = identifiants des dégradés à référencer.
+function logoGroup({ x, y, scale, idbg, idv }) {
+  return `<g transform="translate(${x},${y}) scale(${scale})">
+    <rect width="512" height="512" rx="112" fill="url(#${idbg})"/>
+    <path d="M150 150L256 372L362 150" fill="none" stroke="url(#${idv})" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="150" cy="150" r="26" fill="url(#${idv})"/>
+    <circle cx="150" cy="150" r="11" fill="${COLORS.blueDark}"/>
+    <circle cx="362" cy="150" r="18" fill="url(#${idv})"/>
+  </g>`;
+}
+
 // ----------------------------------------------------------------------------
-// ICON 1024×1024
+// ICON 1024×1024  —  fond bleu plein (Apple/Google rajoutent les coins
+// arrondis ; pas de transparence). Le « V » doit rester lisible à 60×60.
 // ----------------------------------------------------------------------------
-// Apple/Google n'aiment PAS la transparence ni les coins arrondis (ils
-// les rajoutent eux-mêmes selon la plateforme). Donc fond plein.
-//
-// Le monogramme doit rester lisible quand l'icône est rendue à 60×60 px
-// sur l'écran d'accueil iPhone — d'où une typographie épaisse, sans
-// fioriture, et un contraste fort or-sur-noir.
 const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
-    <radialGradient id="bgGlow" cx="0.5" cy="0.42" r="0.75">
-      <stop offset="0%" stop-color="${COLORS.bgGradLight}"/>
-      <stop offset="100%" stop-color="${COLORS.bg}"/>
-    </radialGradient>
-    <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="${COLORS.goldLight}"/>
-      <stop offset="50%" stop-color="${COLORS.gold}"/>
-      <stop offset="100%" stop-color="${COLORS.goldDark}"/>
+    <linearGradient id="ibg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="${COLORS.blue}"/>
+      <stop offset="1" stop-color="${COLORS.blueDark}"/>
+    </linearGradient>
+    <linearGradient id="iv" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="${COLORS.white}"/>
+      <stop offset="1" stop-color="${COLORS.vLight}"/>
     </linearGradient>
   </defs>
-
-  <!-- Fond plein (gradient subtil pour donner de la profondeur) -->
-  <rect width="1024" height="1024" fill="url(#bgGlow)"/>
-
-  <!-- Monogramme TP centré, en serif épais -->
-  <text x="512" y="640" text-anchor="middle"
-        font-family='${SERIF}'
-        font-size="600" font-weight="700"
-        fill="url(#goldGrad)"
-        letter-spacing="-30">TP</text>
-
-  <!-- Fine ligne dorée en accent sous le monogramme -->
-  <rect x="372" y="730" width="280" height="6" fill="${COLORS.gold}" opacity="0.85"/>
-
-  <!-- Petit tag VTC discret en bas -->
-  <text x="512" y="850" text-anchor="middle"
-        font-family='${SANS}'
-        font-size="58" font-weight="600"
-        fill="${COLORS.text}"
-        letter-spacing="14"
-        opacity="0.85">VTC</text>
+  <rect width="1024" height="1024" fill="url(#ibg)"/>
+  <path d="M330 340L512 720L694 340" fill="none" stroke="url(#iv)" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="330" cy="340" r="56" fill="url(#iv)"/>
+  <circle cx="330" cy="340" r="24" fill="${COLORS.blueDark}"/>
+  <circle cx="694" cy="340" r="40" fill="url(#iv)"/>
 </svg>`;
 
 // ----------------------------------------------------------------------------
-// SPLASH 2732×2732
+// SPLASH 2732×2732  —  logo de marque sur fond PAPIER clair + wordmark.
+// Contenu utile centré, Capacitor crope ensuite aux bonnes tailles.
 // ----------------------------------------------------------------------------
-// Apple recommande un PNG carré de cette taille, contenu utile centré
-// dans environ 1/3 du cadre. Capacitor le crop ensuite aux bonnes tailles.
 const splashSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="2732" height="2732" viewBox="0 0 2732 2732">
   <defs>
-    <radialGradient id="splashBg" cx="0.5" cy="0.45" r="0.75">
-      <stop offset="0%" stop-color="${COLORS.bgGradLight}"/>
-      <stop offset="100%" stop-color="${COLORS.bg}"/>
+    <radialGradient id="sbgpage" cx="0.5" cy="0.42" r="0.8">
+      <stop offset="0" stop-color="${COLORS.paperHi}"/>
+      <stop offset="1" stop-color="${COLORS.paper}"/>
     </radialGradient>
-    <linearGradient id="splashGold" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="${COLORS.goldLight}"/>
-      <stop offset="50%" stop-color="${COLORS.gold}"/>
-      <stop offset="100%" stop-color="${COLORS.goldDark}"/>
+    <linearGradient id="slbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="${COLORS.blue}"/>
+      <stop offset="1" stop-color="${COLORS.blueDark}"/>
+    </linearGradient>
+    <linearGradient id="slv" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="${COLORS.white}"/>
+      <stop offset="1" stop-color="${COLORS.vLight}"/>
     </linearGradient>
   </defs>
 
-  <rect width="2732" height="2732" fill="url(#splashBg)"/>
+  <rect width="2732" height="2732" fill="url(#sbgpage)"/>
 
-  <!-- Monogramme TP, grande taille mais pas plein écran -->
-  <text x="1366" y="1180" text-anchor="middle"
+  <!-- Logo (512 d'origine × 1.25 = 640 px), centré horizontalement -->
+  ${logoGroup({ x: 1046, y: 900, scale: 1.25, idbg: 'slbg', idv: 'slv' })}
+
+  <!-- Wordmark TrajetPro -->
+  <text x="1366" y="1820" text-anchor="middle"
         font-family='${SERIF}'
-        font-size="540" font-weight="700"
-        fill="url(#splashGold)"
-        letter-spacing="-25">TP</text>
+        font-size="250" font-weight="600"
+        fill="${COLORS.ink}"
+        letter-spacing="-6">TrajetPro</text>
 
-  <!-- Ligne dorée d'accent -->
-  <rect x="1216" y="1250" width="300" height="4" fill="${COLORS.gold}" opacity="0.7"/>
-
-  <!-- Wordmark TrajetPro sous le monogramme -->
-  <text x="1366" y="1480" text-anchor="middle"
-        font-family='${SERIF}'
-        font-size="220" font-weight="600"
-        fill="${COLORS.text}"
-        letter-spacing="-5">TrajetPro</text>
-
-  <!-- Tagline en petites caps -->
-  <text x="1366" y="1620" text-anchor="middle"
+  <!-- Tagline -->
+  <text x="1366" y="1960" text-anchor="middle"
         font-family='${SANS}'
-        font-size="68" font-weight="500"
-        fill="${COLORS.gold}"
+        font-size="66" font-weight="600"
+        fill="${COLORS.blue}"
         letter-spacing="14">BONS DE COURSE · FACTURES</text>
 
-  <!-- Mention discrète en bas (compatible iPhone safe-area) -->
-  <text x="1366" y="2540" text-anchor="middle"
+  <!-- Mention discrète en bas -->
+  <text x="1366" y="2560" text-anchor="middle"
         font-family='${SANS}'
-        font-size="48" font-weight="400"
-        fill="${COLORS.textMuted}"
-        letter-spacing="6"
-        opacity="0.6">Conforme décret 2017-483</text>
+        font-size="46" font-weight="400"
+        fill="${COLORS.mutedLight}"
+        letter-spacing="6">Conforme décret 2017-483</text>
+</svg>`;
+
+// ----------------------------------------------------------------------------
+// SPLASH DARK 2732×2732  —  variante mode sombre (fond foncé, texte clair).
+// ----------------------------------------------------------------------------
+const splashDarkSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="2732" height="2732" viewBox="0 0 2732 2732">
+  <defs>
+    <radialGradient id="sbgdark" cx="0.5" cy="0.42" r="0.8">
+      <stop offset="0" stop-color="${COLORS.darkBgHi}"/>
+      <stop offset="1" stop-color="${COLORS.darkBg}"/>
+    </radialGradient>
+    <linearGradient id="sdbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="${COLORS.blue}"/>
+      <stop offset="1" stop-color="${COLORS.blueDark}"/>
+    </linearGradient>
+    <linearGradient id="sdv" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="${COLORS.white}"/>
+      <stop offset="1" stop-color="${COLORS.vLight}"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="2732" height="2732" fill="url(#sbgdark)"/>
+
+  ${logoGroup({ x: 1046, y: 900, scale: 1.25, idbg: 'sdbg', idv: 'sdv' })}
+
+  <text x="1366" y="1820" text-anchor="middle"
+        font-family='${SERIF}'
+        font-size="250" font-weight="600"
+        fill="${COLORS.white}"
+        letter-spacing="-6">TrajetPro</text>
+
+  <text x="1366" y="1960" text-anchor="middle"
+        font-family='${SANS}'
+        font-size="66" font-weight="600"
+        fill="${COLORS.blueSoft}"
+        letter-spacing="14">BONS DE COURSE · FACTURES</text>
+
+  <text x="1366" y="2560" text-anchor="middle"
+        font-family='${SANS}'
+        font-size="46" font-weight="400"
+        fill="${COLORS.mutedDark}"
+        letter-spacing="6">Conforme décret 2017-483</text>
 </svg>`;
 
 await mkdir(ASSETS_DIR, { recursive: true });
@@ -150,10 +180,8 @@ await sharp(Buffer.from(splashSvg))
   .png({ compressionLevel: 9 })
   .toFile(resolve(ASSETS_DIR, 'splash.png'));
 
-// Capacitor a besoin d'une variante "dark" explicite pour le dark mode iOS.
-// On reprend le même rendu (notre fond est déjà sombre, donc identique).
 console.log('→ Génération splash-dark.png (2732×2732)…');
-await sharp(Buffer.from(splashSvg))
+await sharp(Buffer.from(splashDarkSvg))
   .png({ compressionLevel: 9 })
   .toFile(resolve(ASSETS_DIR, 'splash-dark.png'));
 

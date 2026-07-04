@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Home, FileText, Receipt, User as UserIcon, Mic, MicOff,
   Plus, MapPin, Clock, Users, Briefcase,
@@ -51,6 +52,9 @@ import {
 } from './lib/supabase.js';
 import { watchNetwork, isNativePlatform, preferencesGet, preferencesSet } from './lib/platform.js';
 import { checkPasswordStrength, isPasswordPwned } from './lib/passwordSecurity.js';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import { geocode, routeBetween } from './lib/geocode.js';
 import {
   isBiometricAvailable,
   isBiometricEnabled,
@@ -398,16 +402,24 @@ const GlobalStyles = () => (
       --text: #F5F4F1;
       --text-dim: #9CA0A8;
       --muted: #5E626B;
-      --accent: #F4B942;
-      --accent-soft: rgba(244,185,66,0.12);
-      --accent-ring: rgba(244,185,66,0.35);
-      --accent-hover: #FBCE67;
+      --accent: #3B82F6;              /* bleu cobalt — fonds, boutons, route */
+      --accent-ink: #60A5FA;          /* bleu clair lisible en texte sur sombre */
+      --accent-on: #FFFFFF;           /* texte/icône posé SUR --accent */
+      --accent-soft: rgba(37,99,235,0.14);
+      --accent-ring: rgba(37,99,235,0.40);
+      --accent-hover: #60A5FA;
       --success: #4ADE80;
       --success-soft: rgba(74,222,128,0.12);
       --error: #F87171;
       --error-soft: rgba(248,113,113,0.12);
       --warn: #FBBF24;
       --warn-soft: rgba(251,191,36,0.12);
+      --nav-bg: rgba(11,11,13,0.85);
+      --shadow-card: none;
+      --shadow-hero: 0 20px 50px -20px rgba(0,0,0,0.7);
+      --map-bg: #101114;
+      --map-road: #1A1C21;
+      --map-block: #16181D;
     }
 
     /* ─── THÈME CLAIR ─────────────────────────────────────────────────
@@ -416,17 +428,39 @@ const GlobalStyles = () => (
        même charte, mêmes ratios de contraste, mais en inversé. L'accent
        doré reste identique (signature TrajetPro). */
     :root[data-theme="light"] {
-      --bg: #FAFAF9;
-      --bg-gradient: radial-gradient(ellipse at top, #FFFFFF 0%, #F5F5F4 50%);
+      /* ─── « TrajetPro Clair » ───────────────────────────────────────
+         Fond papier chaud (pas cream), cartes blanches, encre quasi-noire
+         comme couleur premium dominante, or de marque conservé mais
+         décliné en 2 tons : --accent (vif, pour les FONDS/boutons) et
+         --accent-ink (foncé, lisible en TEXTE sur clair). */
+      --bg: #F6F5F2;
+      --bg-gradient: radial-gradient(ellipse at top, #FFFFFF 0%, #F6F5F2 55%);
       --surface: #FFFFFF;
-      --surface-2: #F5F5F4;
-      --surface-3: #E7E5E4;
-      --border: #D6D3D1;
-      --border-soft: #E7E5E4;
-      --text: #1C1917;
-      --text-dim: #57534E;
-      --muted: #78716C;
-      /* L'accent doré reste identique pour préserver l'identité de marque */
+      --surface-2: #FBFAF7;
+      --surface-3: #F1EFEA;
+      --border: #ECEAE4;
+      --border-soft: #F1EFEA;
+      --text: #16171B;
+      --text-dim: #6B6C73;
+      --muted: #A7A8AE;
+      --accent: #2563EB;              /* bleu cobalt — fonds, boutons, route */
+      --accent-ink: #1D4ED8;          /* bleu foncé — texte lisible sur clair */
+      --accent-on: #FFFFFF;           /* texte/icône posé SUR --accent */
+      --accent-soft: rgba(37,99,235,0.10);
+      --accent-ring: rgba(37,99,235,0.35);
+      --accent-hover: #1D4ED8;
+      --success: #12B76A;
+      --success-soft: rgba(18,183,106,0.12);
+      --error: #E5484D;
+      --error-soft: rgba(229,72,77,0.10);
+      --warn: #B7791F;                /* ambre foncé lisible sur clair */
+      --warn-soft: rgba(224,164,34,0.14);
+      --nav-bg: rgba(255,255,255,0.86);
+      --shadow-card: 0 1px 2px rgba(22,23,27,0.04), 0 8px 24px rgba(22,23,27,0.06);
+      --shadow-hero: 0 22px 60px -24px rgba(22,23,27,0.28);
+      --map-bg: #EDECE7;
+      --map-road: #F7F6F3;
+      --map-block: #E4E7DF;
     }
 
     * { box-sizing: border-box; }
@@ -489,10 +523,10 @@ const GlobalStyles = () => (
       overflow: hidden !important;
     }
 
-    .tp-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; }
+    .tp-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-card); }
     .tp-card-elevated {
       background: linear-gradient(180deg, var(--surface-2), var(--surface));
-      border: 1px solid var(--border); border-radius: 16px;
+      border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-card);
     }
 
     .tp-btn {
@@ -500,7 +534,7 @@ const GlobalStyles = () => (
       padding: 10px 16px; border-radius: 12px; font-weight: 600; font-size: 14px;
       cursor: pointer; transition: all 0.15s ease; border: 1px solid transparent; user-select: none;
     }
-    .tp-btn-primary { background: var(--accent); color: #0B0B0D; }
+    .tp-btn-primary { background: var(--accent); color: var(--accent-on); }
     .tp-btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
     .tp-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
     .tp-btn-ghost { background: var(--surface-2); color: var(--text); border-color: var(--border); }
@@ -522,7 +556,7 @@ const GlobalStyles = () => (
       padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
       background: var(--surface-3); color: var(--text-dim); border: 1px solid var(--border);
     }
-    .tp-chip-accent { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-ring); }
+    .tp-chip-accent { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent-ring); }
     .tp-chip-success { background: var(--success-soft); color: var(--success); border-color: rgba(74,222,128,0.3); }
     .tp-chip-warn { background: var(--warn-soft); color: var(--warn); border-color: rgba(251,191,36,0.3); }
     .tp-chip-error { background: var(--error-soft); color: var(--error); border-color: rgba(248,113,113,0.3); }
@@ -531,7 +565,7 @@ const GlobalStyles = () => (
 
     .tp-nav {
       position: fixed; bottom: 0; left: 0; right: 0;
-      background: rgba(11,11,13,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      background: var(--nav-bg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
       border-top: 1px solid var(--border);
       padding: 10px 14px;
       /* safe-area : laisse de la marge pour le home indicator iPhone, mais
@@ -545,19 +579,19 @@ const GlobalStyles = () => (
       color: var(--muted); cursor: pointer; padding: 6px 12px; border-radius: 10px;
       transition: color 0.15s; font-size: 10px; font-weight: 600; flex: 1; min-width: 0;
     }
-    .tp-nav-item.active { color: var(--accent); }
+    .tp-nav-item.active { color: var(--accent-ink); }
     .tp-nav-mic {
-      width: 56px; height: 56px; background: var(--accent); color: #0B0B0D; border-radius: 18px;
+      width: 56px; height: 56px; background: var(--accent); color: var(--accent-on); border-radius: 18px;
       display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 8px 24px -6px rgba(244,185,66,0.5); cursor: pointer;
+      box-shadow: 0 8px 24px -6px rgba(37,99,235,0.5); cursor: pointer;
       margin-top: -18px; transition: transform 0.2s; border: none;
     }
     .tp-nav-mic:hover { transform: scale(1.05); }
 
     @keyframes tp-pulse {
-      0% { box-shadow: 0 0 0 0 rgba(244,185,66,0.6); }
-      70% { box-shadow: 0 0 0 24px rgba(244,185,66,0); }
-      100% { box-shadow: 0 0 0 0 rgba(244,185,66,0); }
+      0% { box-shadow: 0 0 0 0 rgba(37,99,235,0.6); }
+      70% { box-shadow: 0 0 0 24px rgba(37,99,235,0); }
+      100% { box-shadow: 0 0 0 0 rgba(37,99,235,0); }
     }
     .tp-pulse { animation: tp-pulse 1.5s infinite; }
 
@@ -617,12 +651,12 @@ const GlobalStyles = () => (
     .tp-pack-card:hover { border-color: var(--accent-ring); transform: translateY(-1px); }
     .tp-pack-card.selected {
       border-color: var(--accent);
-      background: linear-gradient(135deg, rgba(244,185,66,0.18), rgba(244,185,66,0.04));
-      box-shadow: 0 6px 24px -10px rgba(244,185,66,0.6);
+      background: linear-gradient(135deg, rgba(37,99,235,0.18), rgba(37,99,235,0.04));
+      box-shadow: 0 6px 24px -10px rgba(37,99,235,0.6);
     }
     .tp-pack-ribbon {
       position: absolute; top: 10px; right: -28px;
-      background: var(--accent); color: #0B0B0D;
+      background: var(--accent); color: var(--accent-on);
       font-size: 9px; font-weight: 800;
       padding: 3px 30px; letter-spacing: 0.08em;
       transform: rotate(35deg); text-transform: uppercase;
@@ -630,6 +664,38 @@ const GlobalStyles = () => (
     }
 
     @keyframes tp-spin { to { transform: rotate(360deg); } }
+
+    /* ─── SPLASH SCREEN (démarrage premium) ─────────────────────────── */
+    /* Logo : fondu + léger zoom 0.9 → 1.0, ~600ms, courbe douce. */
+    @keyframes splash-logo {
+      from { opacity: 0; transform: scale(0.9); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    /* Sortie : fondu + léger glissement vers le haut (fade + slide). */
+    @keyframes splash-exit {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to   { opacity: 0; transform: translateY(-22px) scale(1.02); }
+    }
+    /* Barre de progression indéterminée, très fine. */
+    @keyframes splash-bar {
+      0%   { left: -40%; width: 40%; }
+      50%  { width: 55%; }
+      100% { left: 100%; width: 40%; }
+    }
+    .splash-logo-in { animation: splash-logo 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
+    .splash-exit { animation: splash-exit 0.44s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+    .splash-track {
+      position: relative; width: 116px; height: 3px; border-radius: 3px;
+      background: var(--border); overflow: hidden;
+    }
+    .splash-track > span {
+      position: absolute; top: 0; height: 100%; border-radius: 3px;
+      background: var(--accent); animation: splash-bar 1.15s ease-in-out infinite;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .splash-logo-in, .splash-exit { animation: none; opacity: 1; transform: none; }
+      .splash-track > span { animation: none; left: 0; width: 100%; }
+    }
   `}</style>
 );
 
@@ -672,7 +738,7 @@ function TokenBadge({ balance, onClick, compact = false }) {
       style={{
         cursor: "pointer",
         background: low ? "var(--error-soft)" : "var(--accent-soft)",
-        color: low ? "var(--error)" : "var(--accent)",
+        color: low ? "var(--error)" : "var(--accent-ink)",
         borderColor: low ? "rgba(248,113,113,0.3)" : "var(--accent-ring)",
         padding: compact ? "4px 10px" : "6px 12px",
         fontWeight: 700,
@@ -686,146 +752,616 @@ function TokenBadge({ balance, onClick, compact = false }) {
 }
 
 /* -------------------------------------------------------------------------
-   HOME / DASHBOARD
+   HOME / DASHBOARD  —  refonte « TrajetPro Clair »
    ------------------------------------------------------------------------- */
-function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, onQuickVoice, onNewBooking, onOpenBooking, onGoTab, onOpenPurchase, onPromptSignup, setAgendaOpen }) {
+
+// Temps relatif court et humain (« dans 40 min », « demain », « 12 juil. »).
+function relTime(d) {
+  const ms = d.getTime() - Date.now();
+  if (ms < 0) return "en cours";
+  const min = Math.round(ms / 60000);
+  if (min < 1) return "maintenant";
+  if (min < 60) return `dans ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `dans ${h} h`;
+  const days = Math.round(h / 24);
+  if (days === 1) return "demain";
+  if (days < 7) return `dans ${days} j`;
+  return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+}
+
+// Carte RÉELLE façon Uber : géocode les adresses départ/arrivée, place un
+// point A (encre) + un point B (bleu), trace la liaison, et cadre
+// automatiquement les 2 points avec `fitBounds` → le zoom est proportionnel à
+// la distance (proches = zoom serré, éloignés = dézoom). Tuiles CartoDB
+// Positron (claires, gratuites, sans clé). Carte non-interactive (ne capte
+// pas le scroll de la page). Si le géocodage échoue (hors-ligne / adresse
+// introuvable), appelle `onFail` → le hero retombe sur la map décorative.
+// Petit picto voiture blanc (vue de côté) pour le marqueur chauffeur en route.
+const CAR_MARKER_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H3v-5l2-5h11l3 5v5h-2"/><circle cx="7.5" cy="17" r="1.6"/><circle cx="16.5" cy="17" r="1.6"/></svg>';
+
+function RouteMap({ pickup, dropoff, driver, onReady, onFail, onRoute, onDriverRoute }) {
+  const containerRef = useRef(null);
+  const mapRef = useRef(null);
+  const pickupPtRef = useRef(null);        // coords géocodées de la prise en charge
+  const dropoffPtRef = useRef(null);       // coords géocodées de la dépose
+  const driverMarkerRef = useRef(null);    // marqueur voiture (chauffeur)
+  const driverLineRef = useRef(null);      // tracé chauffeur → client
+  const lastDriverRouteRef = useRef(0);    // throttle du recalcul (timestamp)
+
+  // ── Init carte (une seule fois par couple prise en charge / dépose) ──────
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [a, b] = await Promise.all([geocode(pickup), geocode(dropoff)]);
+      if (cancelled) return;
+      const el = containerRef.current;
+      if (!el) return;
+      if (!a && !b) { onFail && onFail(); return; }
+      pickupPtRef.current = a || null;
+      dropoffPtRef.current = b || null;
+
+      const map = L.map(el, {
+        zoomControl: false, attributionControl: false,
+        dragging: false, scrollWheelZoom: false, doubleClickZoom: false,
+        touchZoom: false, boxZoom: false, keyboard: false, tap: false,
+        zoomSnap: 0.25,
+      });
+      mapRef.current = map;
+
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        subdomains: 'abcd', maxZoom: 19,
+      }).addTo(map);
+
+      const mk = (bg, radius) => L.divIcon({
+        className: '',
+        html: `<div style="width:16px;height:16px;border-radius:${radius};background:${bg};border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35)"></div>`,
+        iconSize: [16, 16], iconAnchor: [8, 8],
+      });
+
+      const pts = [];
+      if (a) { L.marker([a.lat, a.lng], { icon: mk('#16171B', '50%') }).addTo(map); pts.push([a.lat, a.lng]); }
+      if (b) { L.marker([b.lat, b.lng], { icon: mk('#2563EB', '4px') }).addTo(map); pts.push([b.lat, b.lng]); }
+
+      if (pts.length === 2) map.fitBounds(pts, { padding: [36, 36], maxZoom: 15 });
+      else map.setView(pts[0], 14);
+      setTimeout(() => { if (!cancelled && mapRef.current) map.invalidateSize(); }, 60);
+
+      if (a && b) {
+        const route = await routeBetween(a, b);
+        if (cancelled || !mapRef.current) return;
+        const line = (route && route.coords.length > 1) ? route.coords : [[a.lat, a.lng], [b.lat, b.lng]];
+        L.polyline(line, { color: '#2563EB', weight: 4, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+        if (!driver) map.fitBounds(line, { padding: [36, 36], maxZoom: 15 });
+        if (route && onRoute) onRoute({ distanceKm: route.distance / 1000, durationMin: route.duration / 60 });
+        setTimeout(() => { if (!cancelled && mapRef.current) map.invalidateSize(); }, 30);
+      }
+      onReady && onReady();
+    })();
+    return () => {
+      cancelled = true;
+      if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
+      driverMarkerRef.current = null; driverLineRef.current = null;
+    };
+  }, [pickup, dropoff]);
+
+  // ── Suivi chauffeur : marqueur voiture qui bouge + route chauffeur→client ─
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    // Fin de course : on retire le marqueur / le tracé chauffeur et on recadre
+    // la carte sur le trajet complet (prise en charge → dépose).
+    if (!driver || !pickupPtRef.current) {
+      const hadDriver = !!driverMarkerRef.current;
+      if (driverMarkerRef.current) { map.removeLayer(driverMarkerRef.current); driverMarkerRef.current = null; }
+      if (driverLineRef.current) { map.removeLayer(driverLineRef.current); driverLineRef.current = null; }
+      if (hadDriver && pickupPtRef.current && dropoffPtRef.current) {
+        map.fitBounds([[pickupPtRef.current.lat, pickupPtRef.current.lng], [dropoffPtRef.current.lat, dropoffPtRef.current.lng]], { padding: [36, 36], maxZoom: 15 });
+      }
+      return;
+    }
+
+    const carIcon = L.divIcon({
+      className: '',
+      html: `<div style="width:30px;height:30px;border-radius:50%;background:#2563EB;border:3px solid #fff;box-shadow:0 3px 10px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center">${CAR_MARKER_SVG}</div>`,
+      iconSize: [30, 30], iconAnchor: [15, 15],
+    });
+    if (!driverMarkerRef.current) {
+      driverMarkerRef.current = L.marker([driver.lat, driver.lng], { icon: carIcon, zIndexOffset: 1000 }).addTo(map);
+    } else {
+      driverMarkerRef.current.setLatLng([driver.lat, driver.lng]); // déplacement fluide
+    }
+
+    // Recalcul route chauffeur→client throttlé (~15s) pour ménager OSRM ; on
+    // recadre la carte à ce moment-là (pas à chaque fix GPS → moins de saccades).
+    let cancelled = false;
+    const p = pickupPtRef.current;
+    const now = Date.now();
+    if (now - lastDriverRouteRef.current > 15000 || !driverLineRef.current) {
+      lastDriverRouteRef.current = now;
+      routeBetween(driver, p).then((route) => {
+        if (cancelled || !mapRef.current) return;
+        const coords = (route && route.coords.length > 1) ? route.coords : [[driver.lat, driver.lng], [p.lat, p.lng]];
+        if (driverLineRef.current) driverLineRef.current.setLatLngs(coords);
+        else driverLineRef.current = L.polyline(coords, { color: '#2563EB', weight: 4, opacity: 0.6, dashArray: '1 9', lineCap: 'round' }).addTo(map);
+        map.fitBounds([[driver.lat, driver.lng], [p.lat, p.lng]], { padding: [42, 42], maxZoom: 16 });
+        if (route && onDriverRoute) onDriverRoute({ distanceKm: route.distance / 1000, durationMin: route.duration / 60 });
+      });
+    }
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driver?.lat, driver?.lng]);
+
+  return <div ref={containerRef} aria-label="Carte du trajet" style={{ position: "absolute", inset: 0, background: "var(--map-bg)" }} />;
+}
+
+// Suivi de la position du chauffeur (GPS). Actif seulement quand `active` est
+// vrai (course démarrée). Utilise l'API navigator.geolocation — fonctionne en
+// web ET dans la WebView Capacitor (permissions iOS/Android déjà configurées).
+function useDriverLocation(active) {
+  const [pos, setPos] = useState(null);      // { lat, lng, accuracy } | null
+  const [error, setError] = useState(null);  // 'denied' | 'unavailable' | null
+  useEffect(() => {
+    if (!active) { setPos(null); setError(null); return; }
+    if (typeof navigator === "undefined" || !navigator.geolocation) { setError("unavailable"); return; }
+    const id = navigator.geolocation.watchPosition(
+      (p) => { setError(null); setPos({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }); },
+      (err) => { setError(err && err.code === 1 ? "denied" : "unavailable"); },
+      { enableHighAccuracy: true, maximumAge: 8000, timeout: 20000 }
+    );
+    return () => { try { navigator.geolocation.clearWatch(id); } catch { /* noop */ } };
+  }, [active]);
+  return { pos, error };
+}
+
+// Fond « map » ambiant (décoratif, sans dépendance cartographique). Les blocs
+// et routes sont des formes CSS ; la ligne d'itinéraire dorée relie un point A
+// (encre) à un point B (or). Purement esthétique — les adresses réelles sont
+// affichées en texte dans la fiche. Une vraie carte géolocalisée viendra plus
+// tard si besoin. Les couleurs suivent les variables de thème (clair/sombre).
+function AmbientMap({ withRoute = true }) {
+  return (
+    <div aria-hidden="true" style={{ position: "absolute", inset: 0, overflow: "hidden", background: "var(--map-bg)" }}>
+      <div style={{ position: "absolute", width: 128, height: 100, left: -18, top: 18, background: "var(--map-block)", borderRadius: "46% 54% 50% 50%" }}/>
+      <div style={{ position: "absolute", width: 92, height: 78, right: -12, bottom: 4, background: "var(--map-block)", borderRadius: "52% 46% 54% 48%" }}/>
+      <div style={{ position: "absolute", width: 60, height: 48, left: "44%", top: -14, background: "var(--map-block)", borderRadius: 18 }}/>
+      <div style={{ position: "absolute", left: -40, top: 66, width: "170%", height: 12, background: "var(--map-road)", transform: "rotate(-11deg)" }}/>
+      <div style={{ position: "absolute", left: "63%", top: -30, width: 12, height: "180%", background: "var(--map-road)", transform: "rotate(8deg)" }}/>
+      {withRoute && (
+        <>
+          <svg viewBox="0 0 320 160" preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
+            <path d="M52 42 C 132 58, 118 118, 250 122" fill="none" stroke="var(--accent)" strokeWidth="4" strokeLinecap="round"/>
+          </svg>
+          <span style={{ position: "absolute", left: "16%", top: "26%", width: 15, height: 15, borderRadius: "50%", background: "var(--text)", border: "3px solid var(--surface)", boxShadow: "0 2px 6px rgba(0,0,0,0.25)" }}/>
+          <span style={{ position: "absolute", left: "78%", top: "76%", width: 15, height: 15, borderRadius: "50%", background: "var(--accent)", border: "3px solid var(--surface)", boxShadow: "0 2px 6px rgba(0,0,0,0.25)" }}/>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Hero « prochaine course » : fond map + fiche coulissante (bottom-sheet) qui
+// remonte par-dessus. C'est la signature visuelle inspirée des références.
+/* -------------------------------------------------------------------------
+   NAVIGATION GPS — ouvre Google Maps / Waze / Plans vers une adresse
+   ------------------------------------------------------------------------- */
+// Détection iOS (pour proposer Apple Plans).
+function isIOSPlatform() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const capIOS = typeof window !== "undefined" && window.Capacitor && typeof window.Capacitor.getPlatform === "function" && window.Capacitor.getPlatform() === "ios";
+  return /iPad|iPhone|iPod/.test(ua) || !!capIOS;
+}
+
+// Liens UNIVERSELS : ouvrent l'app native si installée, sinon le navigateur
+// (Google Maps web) — ce qui assure le repli demandé sans code spécifique.
+function buildNavUrl(provider, address) {
+  const q = encodeURIComponent(address || "");
+  switch (provider) {
+    case "waze":  return `https://waze.com/ul?q=${q}&navigate=yes`;
+    case "apple": return `https://maps.apple.com/?daddr=${q}&dirflg=d`;
+    case "google":
+    default:      return `https://www.google.com/maps/dir/?api=1&destination=${q}&travelmode=driving`;
+  }
+}
+
+// Ouvre une URL en externe SANS quitter l'app (l'app reste en arrière-plan et
+// l'utilisateur la retrouve à l'écran exact où il était).
+function openExternalUrl(url) {
+  try {
+    if (typeof isNativePlatform === "function" && isNativePlatform()) window.open(url, "_system");
+    else window.open(url, "_blank", "noopener");
+  } catch { try { window.location.href = url; } catch { /* noop */ } }
+}
+
+const GPS_OPTIONS = [
+  { id: "google", label: "Google Maps" },
+  { id: "waze",   label: "Waze" },
+  { id: "apple",  label: "Plans (Apple)", iosOnly: true },
+];
+
+// Feuille de choix du GPS (bottom sheet). Filtre Apple Plans hors iOS.
+function NavSheet({ open, address, onClose, onPick }) {
+  if (!open) return null;
+  const opts = GPS_OPTIONS.filter(o => !o.iosOnly || isIOSPlatform());
+  return (
+    <div className="tp-overlay" onClick={onClose}>
+      <div className="tp-sheet" onClick={e => e.stopPropagation()} style={{ maxHeight: "auto" }}>
+        <div className="tp-grab"/>
+        <div style={{ padding: "16px 20px 6px" }}>
+          <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600 }}>Ouvrir l'itinéraire dans…</div>
+          <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 3, display: "flex", alignItems: "center", gap: 5 }}>
+            <MapPin size={12} style={{ flexShrink: 0 }}/>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{address}</span>
+          </div>
+        </div>
+        <div style={{ padding: "6px 16px" }}>
+          {opts.map(o => (
+            <button key={o.id} onClick={() => onPick(o.id)} className="tp-card" style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: 14, marginBottom: 10, cursor: "pointer", background: "var(--surface)", color: "var(--text)", textAlign: "left" }}>
+              <div style={{ width: 38, height: 38, borderRadius: 11, background: "var(--accent-soft)", color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Navigation size={18}/></div>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{o.label}</span>
+              <ChevronRight size={16} style={{ marginLeft: "auto", color: "var(--text-dim)" }}/>
+            </button>
+          ))}
+          <button onClick={onClose} className="tp-btn tp-btn-ghost" style={{ width: "100%", marginTop: 2, marginBottom: 8 }}>Annuler</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Hook partagé : gère l'ouverture directe (GPS par défaut) ou la feuille de
+// choix, pour le hero ET la fiche détaillée.
+function useNavigate(defaultGps) {
+  const [nav, setNav] = useState({ open: false, address: "" });
+  const start = (address) => {
+    if (!address) return;
+    if (defaultGps && defaultGps !== "ask") { openExternalUrl(buildNavUrl(defaultGps, address)); return; }
+    setNav({ open: true, address });
+  };
+  const pick = (provider) => { openExternalUrl(buildNavUrl(provider, nav.address)); setNav({ open: false, address: "" }); };
+  const close = () => setNav({ open: false, address: "" });
+  return { nav, start, pick, close };
+}
+
+// Appel téléphonique direct (tel:) — n'interrompt pas l'app.
+function callClient(phone) {
+  const p = (phone || "").replace(/[^\d+]/g, "");
+  if (p) openExternalUrl(`tel:${p}`);
+}
+
+// SMS au client (sms:) avec message optionnel pré-rempli. iOS attend `&body=`,
+// Android `?body=` — on adapte selon la plateforme.
+function smsClient(phone, message) {
+  const p = (phone || "").replace(/[^\d+]/g, "");
+  if (!p) return;
+  const sep = isIOSPlatform() ? "&" : "?";
+  const body = message ? `${sep}body=${encodeURIComponent(message)}` : "";
+  openExternalUrl(`sms:${p}${body}`);
+}
+
+function NextCourseHero({ next, onOpen, onNew, activeTripId, onStartTrip, onEndTrip, defaultGps }) {
+  const [mapFailed, setMapFailed] = useState(false);
+  const [routeInfo, setRouteInfo] = useState(null);       // trajet client→dépose (OSRM)
+  const [driverRoute, setDriverRoute] = useState(null);   // chauffeur→client (en route)
+  const [, setTick] = useState(0);                        // tick 30s (ETA/compte à rebours live)
+  const tripTotalRef = useRef(null);                      // distance de départ (pour la progression)
+  const canMap = !!next && !!(next.pickupAddress || next.dropoffAddress);
+
+  // Course en cours (chauffeur en route) = celle affichée dans le hero.
+  const enRoute = !!next && !!activeTripId && activeTripId === next.id;
+  const { pos: driverPos, error: geoError } = useDriverLocation(enRoute);
+  const { nav, start: startNav, pick: pickNav, close: closeNav } = useNavigate(defaultGps);
+  // Destination : adresse de prise en charge avant la course, dépose pendant.
+  const navDest = enRoute ? (next?.dropoffAddress || next?.pickupAddress) : (next?.pickupAddress || next?.dropoffAddress);
+
+  useEffect(() => { setMapFailed(false); setRouteInfo(null); }, [next?.pickupAddress, next?.dropoffAddress]);
+  useEffect(() => { if (!enRoute) { setDriverRoute(null); tripTotalRef.current = null; } }, [enRoute]);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => (t + 1) % 1000000), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ── Calculs façon Uber ────────────────────────────────────────────────
+  const pickupDate = next ? new Date(next.dateTime) : null;
+  const distKm = routeInfo?.distanceKm ?? (next?.distance ? Number(next.distance) : null);
+  const durMin = routeInfo ? Math.round(routeInfo.durationMin) : (next?.duration ? Number(next.duration) : null);
+  const etaDate = (pickupDate && durMin != null) ? new Date(pickupDate.getTime() + durMin * 60000) : null;
+  const nowD = new Date();
+  const isToday = pickupDate && pickupDate.toDateString() === nowD.toDateString();
+  const isTomorrow = pickupDate && (() => { const t = new Date(nowD); t.setDate(t.getDate() + 1); return pickupDate.toDateString() === t.toDateString(); })();
+  const hhmm = (d) => d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  const fmtKm = (km) => `${km.toFixed(1).replace(".", ",")} km`;
+
+  // En route : distance/temps RESTANTS (chauffeur → client) + ETA = maintenant + restant.
+  const remainKm = driverRoute?.distanceKm ?? null;
+  const remainMin = driverRoute ? Math.max(0, Math.round(driverRoute.durationMin)) : null;
+  const arrivalAtClient = (enRoute && remainMin != null) ? new Date(Date.now() + remainMin * 60000) : null;
+  if (enRoute && remainKm != null && (tripTotalRef.current == null || remainKm > tripTotalRef.current)) tripTotalRef.current = remainKm;
+  const progress = (enRoute && remainKm != null && tripTotalRef.current) ? Math.min(1, Math.max(0, 1 - remainKm / tripTotalRef.current)) : 0;
+
+  return (
+    <div style={{ position: "relative", borderRadius: 22, overflow: "hidden", border: "1px solid var(--border)", boxShadow: "var(--shadow-hero)", background: "var(--surface)" }}>
+      {/* MAP */}
+      <div style={{ position: "relative", height: 150 }}>
+        {canMap && !mapFailed
+          ? <RouteMap pickup={next.pickupAddress} dropoff={next.dropoffAddress} driver={enRoute ? driverPos : null} onFail={() => setMapFailed(true)} onRoute={setRouteInfo} onDriverRoute={setDriverRoute} />
+          : <AmbientMap withRoute={!!next} />}
+        <div style={{ position: "absolute", top: 12, left: 14, zIndex: 700, display: "inline-flex", alignItems: "center", gap: 6, background: enRoute ? "var(--accent)" : "var(--nav-bg)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", padding: "5px 11px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: enRoute ? "var(--accent-on)" : "var(--accent-ink)", border: enRoute ? "none" : "1px solid var(--border)" }}>
+          {enRoute ? <Car size={11}/> : <Navigation size={11}/>} {enRoute ? "En route" : (next ? "Prochaine course" : "Rien de prévu")}
+        </div>
+      </div>
+      {/* FICHE (bottom-sheet) */}
+      <div style={{ position: "relative", marginTop: -18, background: "var(--surface)", borderRadius: "22px 22px 0 0", padding: "6px 16px 16px" }}>
+        <div style={{ width: 38, height: 4, borderRadius: 3, background: "var(--border)", margin: "0 auto 12px" }}/>
+        {next ? (
+          <>
+            {/* En-tête : heure prévue OU statut « en route » */}
+            {enRoute ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--accent-ink)", fontWeight: 700, fontSize: 15 }}>
+                  <Car size={16}/> En route vers le client
+                </span>
+                <span style={{ fontSize: 12, color: "var(--text-dim)", fontWeight: 600 }}>· prise en charge {relTime(pickupDate)}</span>
+              </div>
+            ) : (
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                <span className="tp-serif" style={{ fontSize: 24, fontWeight: 600, lineHeight: 1 }}>{hhmm(pickupDate)}</span>
+                <span style={{ fontSize: 12, color: "var(--text-dim)", fontWeight: 600 }}>
+                  · {relTime(pickupDate)}{next.phone ? ` · ${maskPhone(next.phone)}` : ""}
+                </span>
+              </div>
+            )}
+
+            {/* Adresses (rail A→B) — commun aux deux modes */}
+            <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", paddingTop: 5 }}>
+                <span style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--text)" }}/>
+                <span style={{ width: 2, flex: 1, minHeight: 20, margin: "3px 0", background: "repeating-linear-gradient(var(--muted) 0 3px, transparent 3px 7px)" }}/>
+                <span style={{ width: 10, height: 10, borderRadius: 3, background: "var(--accent)" }}/>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 10.5, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Prise en charge</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{next.pickupAddress || "—"}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10.5, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Dépose</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{next.dropoffAddress || "—"}</div>
+                </div>
+              </div>
+            </div>
+
+            {enRoute ? (
+              /* ── MODE EN ROUTE : distance/temps RESTANTS + progression live ── */
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+                {geoError ? (
+                  <div style={{ fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.5 }}>
+                    {geoError === "denied"
+                      ? "Localisation refusée — activez-la dans les réglages pour le suivi en temps réel."
+                      : "Localisation indisponible sur cet appareil."}
+                  </div>
+                ) : !driverPos ? (
+                  <div style={{ fontSize: 12.5, color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 8 }}>
+                    <Loader2 size={14} style={{ animation: "tp-spin 1s linear infinite", color: "var(--accent-ink)" }}/> Localisation en cours…
+                  </div>
+                ) : (
+                  <>
+                    {/* Barre de progression avec voiture à la position du trajet */}
+                    <div style={{ position: "relative", height: 12, marginBottom: 12 }}>
+                      <div style={{ position: "absolute", top: 5, left: 0, right: 0, height: 3, borderRadius: 3, background: "var(--accent)", opacity: 0.22 }}/>
+                      <div style={{ position: "absolute", top: 5, left: 0, width: `${progress * 100}%`, height: 3, borderRadius: 3, background: "var(--accent)" }}/>
+                      <span style={{ position: "absolute", top: 1, left: `calc(${progress * 100}% - 6px)`, width: 12, height: 12, borderRadius: "50%", background: "var(--accent)", border: "2px solid var(--surface)", boxShadow: "0 1px 3px rgba(0,0,0,.3)" }}/>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 13, fontWeight: 600 }}>
+                        {remainKm != null && <span style={{ display: "flex", alignItems: "center", gap: 5 }}><Navigation size={13} style={{ color: "var(--accent-ink)" }}/>{fmtKm(remainKm)} restants</span>}
+                        {remainMin != null && <span style={{ display: "flex", alignItems: "center", gap: 5 }}><Clock size={13} style={{ color: "var(--accent-ink)" }}/>{remainMin} min</span>}
+                      </div>
+                      {arrivalAtClient && (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "var(--success-soft)", color: "var(--success)", padding: "4px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--success)" }}/> Arrivée {hhmm(arrivalAtClient)}
+                        </span>
+                      )}
+                    </div>
+                  </>
+                )}
+                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                  {next.phone && <button onClick={() => callClient(next.phone)} className="tp-btn tp-btn-ghost" style={{ flex: 1, padding: "11px 6px", fontSize: 13 }}><Phone size={15}/> Appeler</button>}
+                  <button onClick={() => startNav(navDest)} className="tp-btn tp-btn-ghost" style={{ flex: 1, padding: "11px 6px", fontSize: 13 }}><Navigation size={15}/> Naviguer</button>
+                </div>
+                <button onClick={onEndTrip} className="tp-btn tp-btn-primary" style={{ width: "100%", marginTop: 8, padding: 13, borderRadius: 14, fontSize: 14.5 }}><Check size={16}/> Je suis arrivé</button>
+              </div>
+            ) : (
+              /* ── MODE PLANIFIÉ : distance • durée • ETA ── */
+              <>
+                {(distKm != null || durMin != null) && (
+                  <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--text)", flexShrink: 0 }}/>
+                      <span style={{ flex: 1, height: 3, borderRadius: 3, background: "var(--accent)", opacity: 0.35 }}/>
+                      <Car size={14} style={{ color: "var(--accent-ink)", flexShrink: 0 }}/>
+                      <span style={{ flex: 1, height: 3, borderRadius: 3, background: "var(--accent)", opacity: 0.35 }}/>
+                      <span style={{ width: 9, height: 9, borderRadius: 2, background: "var(--accent)", flexShrink: 0 }}/>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 13, fontWeight: 600 }}>
+                        {distKm != null && <span style={{ display: "flex", alignItems: "center", gap: 5 }}><Navigation size={13} style={{ color: "var(--accent-ink)" }}/>{fmtKm(distKm)}</span>}
+                        {durMin != null && <span style={{ display: "flex", alignItems: "center", gap: 5 }}><Clock size={13} style={{ color: "var(--accent-ink)" }}/>{durMin} min</span>}
+                      </div>
+                      {etaDate && isToday && (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "var(--success-soft)", color: "var(--success)", padding: "4px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--success)" }}/> Arrivée estimée {hhmm(etaDate)}
+                        </span>
+                      )}
+                    </div>
+                    {etaDate && !isToday && (
+                      <div style={{ marginTop: 8, fontSize: 12.5, color: "var(--text-dim)", fontWeight: 600 }}>
+                        Départ {isTomorrow ? "demain" : `le ${pickupDate.toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}`} à {hhmm(pickupDate)} · Arrivée estimée {hhmm(etaDate)}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Prix + client */}
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginTop: 14 }}>
+                  <span className="tp-serif" style={{ fontSize: 24, fontWeight: 600 }}>{eur(next.price)}</span>
+                  <span style={{ fontSize: 12, color: "var(--text-dim)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "55%" }}>{next.customerName}</span>
+                </div>
+                {/* Actions rapides : Appeler · Naviguer · Ouvrir */}
+                <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                  {next.phone && <button onClick={() => callClient(next.phone)} className="tp-btn tp-btn-ghost" style={{ flex: 1, padding: "11px 6px", fontSize: 13 }}><Phone size={15}/> Appeler</button>}
+                  <button onClick={() => startNav(navDest)} className="tp-btn tp-btn-ghost" style={{ flex: 1, padding: "11px 6px", fontSize: 13 }}><Navigation size={15}/> Naviguer</button>
+                  <button onClick={() => onOpen(next)} className="tp-btn tp-btn-ghost" style={{ flex: 1, padding: "11px 6px", fontSize: 13 }}>Ouvrir <ChevronRight size={15}/></button>
+                </div>
+                {isToday && onStartTrip && (
+                  <button onClick={() => onStartTrip(next)} className="tp-btn tp-btn-primary" style={{ width: "100%", marginTop: 8, padding: 13, borderRadius: 14, fontSize: 14.5 }}>
+                    <Car size={16}/> Démarrer la course
+                  </button>
+                )}
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 13, color: "var(--text-dim)", textAlign: "center", marginBottom: 12, lineHeight: 1.5 }}>
+              Aucune course à venir.<br/>Dictez votre prochaine course en 5 secondes.
+            </div>
+            <button onClick={onNew} className="tp-btn tp-btn-primary" style={{ width: "100%", padding: 13, borderRadius: 14, fontSize: 14.5 }}>
+              <Mic size={17}/> Nouveau bon vocal
+            </button>
+          </>
+        )}
+      </div>
+      {typeof document !== "undefined" && createPortal(
+        <NavSheet open={nav.open} address={nav.address} onClose={closeNav} onPick={pickNav}/>,
+        document.querySelector(".tp-phone") || document.body
+      )}
+    </div>
+  );
+}
+
+function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, onQuickVoice, onNewBooking, onOpenBooking, onGoTab, onOpenPurchase, onPromptSignup, setAgendaOpen, activeTripId, onStartTrip, onEndTrip, defaultGps }) {
   const today = new Date();
   const todayBookings = bookings.filter(b => new Date(b.dateTime).toDateString() === today.toDateString());
   const weekRevenue = invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.amount, 0);
 
+  // Courses futures triées : la prochaine sert de hero, le reste alimente la liste.
+  const now = Date.now();
+  const upcoming = bookings
+    .filter(b => new Date(b.dateTime).getTime() > now)
+    .sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime))
+    .slice(0, 20);
+  const next = upcoming[0] || null;
+  const rest = upcoming.slice(1);
+
   return (
-    /* Layout type "app native" (Uber/Deliveroo) :
-       - Header (greeting + tokens + stats + bouton vocal + actions rapides)
-         FIXE en haut → ne bouge jamais.
-       - Liste des prochaines courses + carte Conformité = SEULE zone
-         scrollable verticalement.
-       - BottomNav reste fixe (gérée par le parent App). */
-    <div className="tp-fade-in" style={{
-      flex: 1,
-      display: "flex",
-      flexDirection: "column",
-      overflow: "hidden",                       // bloque le scroll global du screen
-      paddingTop: "calc(env(safe-area-inset-top) + 14px)",   // sous la status bar iPhone
-      minHeight: 0,
-    }}>
-      {/* ─── HEADER FIXE ─────────────────────────────────────────── */}
-      <div style={{ flexShrink: 0, background: "var(--bg-gradient)" }}>
-        <div style={{ padding: "10px 20px 4px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-            <div>
-              <div style={{ fontSize: 12, color: "var(--text-dim)", fontWeight: 500 }}>
-                {today.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}
-              </div>
-              <h1 className="tp-serif" style={{ fontSize: 32, fontWeight: 600, margin: "6px 0 0", lineHeight: 1.1 }}>
-                Bonjour,<br/>
-                <span style={{ color: "var(--accent)" }}>{currentUser?.name?.split(' ')[0] || DRIVER_PROFILE.firstName}</span>.
-              </h1>
+    // Scroll unique (comme les apps de référence), plus simple et plus aéré
+    // que l'ancien header fixe + liste. La BottomNav reste gérée par le parent.
+    <div className="tp-fade-in" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+      <div style={{
+        flex: 1,
+        overflowY: "auto",
+        WebkitOverflowScrolling: "touch",
+        overscrollBehavior: "contain",
+        paddingTop: "calc(env(safe-area-inset-top) + 12px)",
+        paddingBottom: "calc(110px + env(safe-area-inset-bottom))",
+        paddingLeft: 20, paddingRight: 20,
+        minHeight: 0,
+      }}>
+        {/* Salutation + crédits */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 12, color: "var(--text-dim)", fontWeight: 500 }}>
+              {today.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}
             </div>
-            <TokenBadge balance={tokenBalance} onClick={() => onGoTab("tokens")}/>
+            <h1 className="tp-serif" style={{ fontSize: 30, fontWeight: 600, margin: "6px 0 0", lineHeight: 1.1 }}>
+              Bonjour,{" "}
+              <span style={{ color: "var(--accent-ink)" }}>{currentUser?.name?.split(' ')[0] || DRIVER_PROFILE.firstName}</span>.
+            </h1>
           </div>
+          <TokenBadge balance={tokenBalance} onClick={() => onGoTab("tokens")}/>
         </div>
 
-        {isGuest && <GuestBanner onSignup={onPromptSignup}/>}
+        {isGuest && <div style={{ marginTop: 12 }}><GuestBanner onSignup={onPromptSignup}/></div>}
 
-        <div style={{ padding: "16px 20px 0", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <div className="tp-card-elevated" style={{ padding: 14 }}>
+        {/* HERO : prochaine course sur fond map */}
+        <div style={{ marginTop: 16 }}>
+          <NextCourseHero next={next} onOpen={onOpenBooking} onNew={onQuickVoice} activeTripId={activeTripId} onStartTrip={onStartTrip} onEndTrip={onEndTrip} defaultGps={defaultGps}/>
+        </div>
+
+        {/* Stats */}
+        <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="tp-card" style={{ padding: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-dim)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
               <Calendar size={12} /> Aujourd'hui
             </div>
             <div className="tp-serif" style={{ fontSize: 26, fontWeight: 600, marginTop: 4 }}>{todayBookings.length}</div>
             <div style={{ fontSize: 11, color: "var(--text-dim)" }}>course{todayBookings.length > 1 ? "s" : ""} prévue{todayBookings.length > 1 ? "s" : ""}</div>
           </div>
-          <div className="tp-card-elevated" style={{ padding: 14 }}>
+          <div className="tp-card" style={{ padding: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-dim)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
               <TrendingUp size={12} /> CA encaissé
             </div>
-            <div className="tp-serif" style={{ fontSize: 26, fontWeight: 600, marginTop: 4, color: "var(--accent)" }}>{eur(weekRevenue)}</div>
+            <div className="tp-serif" style={{ fontSize: 26, fontWeight: 600, marginTop: 4 }}>{eur(weekRevenue)}</div>
             <div style={{ fontSize: 11, color: "var(--text-dim)" }}>cette semaine</div>
           </div>
         </div>
 
-        <div style={{ padding: "12px 20px 0" }}>
-          <button onClick={onQuickVoice} className="tp-card-elevated" style={{
+        {/* Vocal */}
+        <div style={{ marginTop: 12 }}>
+          <button onClick={onQuickVoice} className="tp-card" style={{
             width: "100%", padding: 16, display: "flex", alignItems: "center", gap: 14,
             cursor: "pointer", textAlign: "left", border: "1px solid var(--accent-ring)",
-            background: "linear-gradient(135deg, rgba(244,185,66,0.15), rgba(244,185,66,0.02))",
+            background: "linear-gradient(135deg, var(--accent-soft), transparent)",
           }}>
-            <div style={{ width: 44, height: 44, borderRadius: 12, background: "var(--accent)", color: "#0B0B0D", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 4px 12px -4px rgba(244,185,66,0.5)" }}>
+            <div style={{ width: 44, height: 44, borderRadius: 12, background: "var(--accent)", color: "var(--accent-on)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 6px 16px -6px var(--accent-ring)", flexShrink: 0 }}>
               <Mic size={22} strokeWidth={2.2}/>
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.01em" }}>Nouveau bon vocal</div>
               <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>
-                Dictez votre course · <span style={{ color: "var(--accent)", fontWeight: 600 }}>1 crédit</span>
+                Dictez votre course · <span style={{ color: "var(--accent-ink)", fontWeight: 600 }}>1 crédit</span>
               </div>
             </div>
-            <Sparkles size={18} style={{ color: "var(--accent)" }}/>
+            <Sparkles size={18} style={{ color: "var(--accent-ink)", flexShrink: 0 }}/>
           </button>
         </div>
 
-        <div style={{ padding: "10px 20px 16px", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+        {/* Actions rapides */}
+        <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
           {[
             { icon: Plus, label: "Manuel", onClick: onNewBooking },
             { icon: Car, label: "Courses", onClick: () => onGoTab("bookings") },
             { icon: Receipt, label: "Factures", onClick: () => onGoTab("invoices") },
-            // "Agenda" ouvre une vue calendrier (modal) qui affiche le mois
-            // en cours avec un point sur chaque jour ayant au moins une
-            // course planifiée — utile pour voir d'un coup d'œil sa charge
-            // mensuelle, sans dupliquer la liste de "Courses".
             { icon: Calendar, label: "Agenda", onClick: () => setAgendaOpen(true) },
           ].map((a, i) => (
-            <button key={i} onClick={a.onClick} className="tp-card" style={{ padding: "12px 4px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer", background: "var(--surface)" }}>
-              <a.icon size={20} style={{ color: "var(--accent)" }}/>
+            <button key={i} onClick={a.onClick} className="tp-card" style={{ padding: "12px 4px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <a.icon size={20} style={{ color: "var(--accent-ink)" }}/>
               <span style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.01em" }}>{a.label}</span>
             </button>
           ))}
         </div>
-      </div>
 
-      {/* ─── ZONE SCROLLABLE INDÉPENDANTE ────────────────────────── */}
-      <div style={{
-        flex: 1,
-        overflowY: "auto",
-        WebkitOverflowScrolling: "touch",
-        overscrollBehavior: "contain",
-        padding: "0 20px calc(110px + env(safe-area-inset-bottom)) 20px",
-        minHeight: 0,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingTop: 4 }}>
-          <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600 }}>Prochaines courses</div>
-          <button onClick={() => onGoTab("bookings")} style={{ fontSize: 12, color: "var(--accent)", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
-            Tout voir <ArrowUpRight size={12}/>
-          </button>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {(() => {
-            // Affiche UNIQUEMENT les courses futures (date > maintenant) sur
-            // la page Accueil. Une course passée disparaît automatiquement
-            // d'ici, mais reste accessible via "Mes courses" (historique).
-            // Tri chronologique croissant : la prochaine course en premier.
-            const now = Date.now();
-            const upcoming = bookings
-              .filter(b => new Date(b.dateTime).getTime() > now)
-              .sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime))
-              .slice(0, 20);
-            if (upcoming.length === 0) {
-              return (
-                <div style={{ padding: 28, textAlign: "center", color: "var(--text-dim)", border: "1px dashed var(--border)", borderRadius: 14 }}>
-                  <Calendar size={28} style={{ opacity: 0.4, margin: "0 auto 8px" }}/>
-                  <div style={{ fontSize: 13 }}>Aucune course à venir</div>
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
-                    Créez-en une via le bouton 🎙️ ou "Manuel"
-                  </div>
-                </div>
-              );
-            }
-            return upcoming.map(b => <BookingCard key={b.id} booking={b} onClick={() => onOpenBooking(b)} />);
-          })()}
-        </div>
+        {/* Reste des prochaines courses */}
+        {rest.length > 0 && (
+          <>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "20px 0 10px" }}>
+              <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600 }}>À suivre</div>
+              <button onClick={() => onGoTab("bookings")} style={{ fontSize: 12, color: "var(--accent-ink)", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
+                Tout voir <ArrowUpRight size={12}/>
+              </button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {rest.map(b => <BookingCard key={b.id} booking={b} onClick={() => onOpenBooking(b)} />)}
+            </div>
+          </>
+        )}
 
-        {/* Carte Conformité en bas du scroll, après toutes les courses */}
+        {/* Conformité */}
         <div style={{ marginTop: 16 }}>
-          <div className="tp-card" style={{ padding: 14, display: "flex", gap: 12, alignItems: "center", background: "linear-gradient(135deg, rgba(16,185,129,0.10), rgba(16,185,129,0.02))", border: "1px solid rgba(16,185,129,0.25)" }}>
+          <div className="tp-card" style={{ padding: 14, display: "flex", gap: 12, alignItems: "center", background: "linear-gradient(135deg, var(--success-soft), transparent)", border: "1px solid var(--success-soft)" }}>
             <div style={{ width: 38, height: 38, borderRadius: 11, background: "var(--success-soft)", color: "var(--success)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <Shield size={18}/>
             </div>
@@ -856,7 +1392,7 @@ function BookingCard({ booking, onClick }) {
       textAlign: "left", cursor: "pointer", background: "var(--surface)", alignItems: "stretch",
     }}>
       <div style={{ width: 54, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", borderRight: "1px solid var(--border)", paddingRight: 10 }}>
-        <div className="tp-serif" style={{ fontSize: 20, fontWeight: 600, lineHeight: 1, color: "var(--accent)" }}>{time}</div>
+        <div className="tp-serif" style={{ fontSize: 20, fontWeight: 600, lineHeight: 1, color: "var(--accent-ink)" }}>{time}</div>
         <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>{day}</div>
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -864,20 +1400,22 @@ function BookingCard({ booking, onClick }) {
           <div style={{ fontSize: 14, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{booking.customerName}</div>
           <span className={`tp-chip ${isPending ? "tp-chip-warn" : "tp-chip-success"}`}>{isPending ? "En attente" : "Confirmée"}</span>
         </div>
-        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 3 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-dim)" }}>
-            <div style={{ width: 6, height: 6, borderRadius: 3, background: "var(--accent)", flexShrink: 0 }}/>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{booking.pickupAddress}</span>
+        <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+          {/* Rail A → B (encre → bleu), cohérent avec le hero et le formulaire */}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", paddingTop: 4 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--text)", flexShrink: 0 }}/>
+            <span style={{ width: 2, flex: 1, minHeight: 8, margin: "2px 0", background: "repeating-linear-gradient(var(--muted) 0 2px, transparent 2px 5px)" }}/>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: "var(--accent)", flexShrink: 0 }}/>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-dim)" }}>
-            <div style={{ width: 6, height: 6, borderRadius: 3, background: "var(--text-dim)", flexShrink: 0 }}/>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{booking.dropoffAddress}</span>
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+            <span style={{ fontSize: 12, color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{booking.pickupAddress}</span>
+            <span style={{ fontSize: 12, color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{booking.dropoffAddress}</span>
           </div>
         </div>
         <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, fontSize: 11, color: "var(--text-dim)" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 3 }}><Users size={11}/> {booking.passengers}</span>
           {booking.hasLuggage && <span style={{ display: "flex", alignItems: "center", gap: 3 }}><Briefcase size={11}/> Bagages</span>}
-          <span style={{ marginLeft: "auto", color: "var(--accent)", fontWeight: 700, fontSize: 13 }}>{eur(booking.price)}</span>
+          <span style={{ marginLeft: "auto", color: "var(--accent-ink)", fontWeight: 700, fontSize: 13 }}>{eur(booking.price)}</span>
         </div>
       </div>
     </button>
@@ -1212,10 +1750,10 @@ function VoiceCapture({ open, onClose, onConfirm }) {
               aria-label={listening ? "Arrêter la dictée" : "Démarrer la dictée"}
               style={{
                 width: 100, height: 100, borderRadius: "50%",
-                background: listening ? "var(--error)" : "var(--accent)", color: "#0B0B0D", border: "none",
+                background: listening ? "var(--error)" : "var(--accent)", color: "var(--accent-on)", border: "none",
                 display: "flex", alignItems: "center", justifyContent: "center",
                 cursor: supported ? "pointer" : "not-allowed",
-                boxShadow: "0 12px 40px -8px rgba(244,185,66,0.4)", opacity: supported ? 1 : 0.5,
+                boxShadow: "0 12px 40px -8px rgba(37,99,235,0.4)", opacity: supported ? 1 : 0.5,
                 position: "relative",
               }}
             >
@@ -1225,7 +1763,7 @@ function VoiceCapture({ open, onClose, onConfirm }) {
                 <div style={{
                   position: "absolute", top: -8, right: -8,
                   width: 30, height: 30, borderRadius: "50%",
-                  background: "var(--accent)", color: "#0B0B0D",
+                  background: "var(--accent)", color: "var(--accent-on)",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontWeight: 700, fontSize: 14,
                   border: "2px solid #0B0B0D",
@@ -1244,7 +1782,7 @@ function VoiceCapture({ open, onClose, onConfirm }) {
 
             <div style={{ textAlign: "center", minHeight: 20 }}>
               {listening ? (
-                <div style={{ fontSize: 13, color: "var(--accent)", fontWeight: 600 }}>
+                <div style={{ fontSize: 13, color: "var(--accent-ink)", fontWeight: 600 }}>
                   {silenceCountdown > 0
                     ? `Silence détecté — arrêt dans ${silenceCountdown}s`
                     : "À l'écoute… parlez naturellement"}
@@ -1278,8 +1816,8 @@ function VoiceCapture({ open, onClose, onConfirm }) {
                 une version reformulée différente de l'original. Utile pour que le
                 chauffeur voit ce que l'IA a interprété. */}
             {aiResult?.transcription_corrigee && aiResult.transcription_corrigee.trim() && (
-              <div style={{ marginBottom: 10, padding: "8px 10px", background: "rgba(244,185,66,0.06)", borderRadius: 8, border: "1px solid rgba(244,185,66,0.15)" }}>
-                <div style={{ fontSize: 10, color: "var(--accent)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 3, display: "flex", alignItems: "center", gap: 4 }}>
+              <div style={{ marginBottom: 10, padding: "8px 10px", background: "rgba(37,99,235,0.06)", borderRadius: 8, border: "1px solid rgba(37,99,235,0.15)" }}>
+                <div style={{ fontSize: 10, color: "var(--accent-ink)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 3, display: "flex", alignItems: "center", gap: 4 }}>
                   <Sparkles size={10}/> Compris par l'IA
                 </div>
                 <div style={{ fontSize: 12, color: "var(--text-dim)", lineHeight: 1.4, fontStyle: "italic" }}>
@@ -1291,7 +1829,7 @@ function VoiceCapture({ open, onClose, onConfirm }) {
             <div className="tp-label" style={{ marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
               Transcription
               {aiLoading && (
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--accent)", fontWeight: 600, marginLeft: 4 }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--accent-ink)", fontWeight: 600, marginLeft: 4 }}>
                   <Loader2 size={11} style={{ animation: "tp-spin 1s linear infinite" }}/>
                   Raffinement IA…
                 </span>
@@ -1477,7 +2015,7 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
                 padding: 12, cursor: "pointer",
                 background: form.type === opt.v ? "var(--accent-soft)" : "var(--surface)",
                 borderColor: form.type === opt.v ? "var(--accent-ring)" : "var(--border)",
-                color: form.type === opt.v ? "var(--accent)" : "var(--text)",
+                color: form.type === opt.v ? "var(--accent-ink)" : "var(--text)",
                 fontWeight: 600, fontSize: 13,
               }}>{opt.l}</button>
             ))}
@@ -1491,7 +2029,7 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
               <button type="button"
                 onClick={() => setClientPickerOpen(v => !v)}
                 style={{
-                  fontSize: 10, color: "var(--accent)", background: "none", border: "none",
+                  fontSize: 10, color: "var(--accent-ink)", background: "none", border: "none",
                   cursor: "pointer", fontWeight: 600, padding: 0, display: "flex",
                   alignItems: "center", gap: 4,
                 }}>
@@ -1528,7 +2066,7 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
                   }}>
                   <div style={{
                     width: 32, height: 32, borderRadius: 8, background: "var(--accent-soft)",
-                    color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center",
+                    color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center",
                     fontWeight: 700, fontSize: 13, flexShrink: 0,
                   }}>
                     {c.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
@@ -1560,59 +2098,75 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
           </div>
         </div>
 
-        <div style={{ position: "relative" }}>
-          <div className="tp-label" style={{ marginBottom: 6 }}>Prise en charge</div>
-          <div style={{ position: "relative" }}>
-            <MapPin size={16} style={{ position: "absolute", left: 14, top: 14, color: "var(--accent)" }}/>
-            <input className="tp-input" style={{ paddingLeft: 38 }} placeholder="Adresse de départ"
-              value={form.pickupAddress} onChange={e => update("pickupAddress", e.target.value)}
-              onFocus={() => setPickupSuggestOpen(true)}/>
-          </div>
-          {pickupSuggestOpen && (
-            <div className="tp-fade-in" style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", padding: "0 2px" }}>
-                Suggestions près de {DRIVER_PROFILE.baseCity}
+        {/* ─── TRAJET — flow départ → arrivée façon transfert d'argent ─── */}
+        <div>
+          <div className="tp-label" style={{ marginBottom: 8 }}>Trajet</div>
+          <div className="tp-card-elevated" style={{ padding: 14 }}>
+            <div style={{ display: "flex", gap: 12 }}>
+              {/* Rail A → B */}
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", paddingTop: 30 }}>
+                <span style={{ width: 12, height: 12, borderRadius: "50%", background: "var(--text)", flexShrink: 0 }}/>
+                <span style={{ width: 2, flex: 1, minHeight: 30, margin: "5px 0", background: "repeating-linear-gradient(var(--muted) 0 3px, transparent 3px 6px)" }}/>
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: "var(--accent)", flexShrink: 0 }}/>
               </div>
-              {filterAddrs(form.pickupAddress).map(a => (
-                <button key={a.label} className="tp-addr-chip" onClick={() => { update("pickupAddress", a.label); setPickupSuggestOpen(false); }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
-                    <MapPin size={13} style={{ color: "var(--text-dim)", flexShrink: 0 }}/>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)" }}>{a.label}</div>
-                      <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{a.detail}</div>
-                    </div>
-                  </div>
-                </button>
-              ))}
-              <button onClick={() => setPickupSuggestOpen(false)} style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer", padding: 6, textAlign: "left" }}>Masquer les suggestions</button>
+              {/* Champs départ / arrivée */}
+              <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Départ</div>
+                  <input className="tp-input" placeholder="Adresse de départ"
+                    value={form.pickupAddress} onChange={e => update("pickupAddress", e.target.value)}
+                    onFocus={() => { setPickupSuggestOpen(true); setDropoffSuggestOpen(false); }}/>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Arrivée</div>
+                  <input className="tp-input" placeholder="Adresse d'arrivée"
+                    value={form.dropoffAddress} onChange={e => update("dropoffAddress", e.target.value)}
+                    onFocus={() => { setDropoffSuggestOpen(true); setPickupSuggestOpen(false); }}/>
+                </div>
+              </div>
             </div>
-          )}
-        </div>
 
-        <div style={{ position: "relative" }}>
-          <div className="tp-label" style={{ marginBottom: 6 }}>Destination</div>
-          <div style={{ position: "relative" }}>
-            <Navigation size={16} style={{ position: "absolute", left: 14, top: 14, color: "var(--text-dim)" }}/>
-            <input className="tp-input" style={{ paddingLeft: 38 }} placeholder="Adresse d'arrivée"
-              value={form.dropoffAddress} onChange={e => update("dropoffAddress", e.target.value)}
-              onFocus={() => setDropoffSuggestOpen(true)}/>
-          </div>
-          {dropoffSuggestOpen && (
-            <div className="tp-fade-in" style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-              {filterAddrs(form.dropoffAddress).map(a => (
-                <button key={a.label} className="tp-addr-chip" onClick={() => { update("dropoffAddress", a.label); setDropoffSuggestOpen(false); }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
-                    <Navigation size={13} style={{ color: "var(--text-dim)", flexShrink: 0 }}/>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)" }}>{a.label}</div>
-                      <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{a.detail}</div>
+            {/* Suggestions (départ) */}
+            {pickupSuggestOpen && (
+              <div className="tp-fade-in" style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", padding: "0 2px" }}>
+                  Départ · suggestions près de {DRIVER_PROFILE.baseCity}
+                </div>
+                {filterAddrs(form.pickupAddress).map(a => (
+                  <button key={a.label} className="tp-addr-chip" onClick={() => { update("pickupAddress", a.label); setPickupSuggestOpen(false); }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
+                      <MapPin size={13} style={{ color: "var(--text-dim)", flexShrink: 0 }}/>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)" }}>{a.label}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{a.detail}</div>
+                      </div>
                     </div>
-                  </div>
-                </button>
-              ))}
-              <button onClick={() => setDropoffSuggestOpen(false)} style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer", padding: 6, textAlign: "left" }}>Masquer les suggestions</button>
-            </div>
-          )}
+                  </button>
+                ))}
+                <button onClick={() => setPickupSuggestOpen(false)} style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer", padding: 6, textAlign: "left" }}>Masquer les suggestions</button>
+              </div>
+            )}
+            {/* Suggestions (arrivée) */}
+            {dropoffSuggestOpen && (
+              <div className="tp-fade-in" style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", padding: "0 2px" }}>
+                  Arrivée · suggestions
+                </div>
+                {filterAddrs(form.dropoffAddress).map(a => (
+                  <button key={a.label} className="tp-addr-chip" onClick={() => { update("dropoffAddress", a.label); setDropoffSuggestOpen(false); }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
+                      <Navigation size={13} style={{ color: "var(--text-dim)", flexShrink: 0 }}/>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)" }}>{a.label}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{a.detail}</div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+                <button onClick={() => setDropoffSuggestOpen(false)} style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer", padding: 6, textAlign: "left" }}>Masquer les suggestions</button>
+              </div>
+            )}
+          </div>
         </div>
 
         <div>
@@ -1645,14 +2199,33 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
           </div>
         </div>
 
-        <div className="tp-card-elevated" style={{ padding: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <div className="tp-label">Tarif et trajet</div>
+        {/* ─── MONTANT — grand chiffre façon transfert d'argent ─── */}
+        <div className="tp-card-elevated" style={{ padding: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+            <div className="tp-label">Montant de la course · TTC</div>
             <button onClick={() => update("price", Math.round(estimatedPrice))}
-              style={{ fontSize: 11, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 600, display: "flex", alignItems: "center", gap: 3 }}>
+              className="tp-chip" style={{ cursor: "pointer", background: "var(--accent-soft)", color: "var(--accent-ink)", borderColor: "var(--accent-ring)", fontWeight: 700 }}>
               <Zap size={11}/> Estimer
             </button>
           </div>
+          {/* Grand montant éditable */}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <input
+              className="tp-serif"
+              type="number" inputMode="decimal" step="0.01" min="0" placeholder="0"
+              aria-label="Montant de la course en euros"
+              style={{ flex: 1, minWidth: 0, width: "100%", background: "transparent", border: "none", outline: "none", color: "var(--text)", fontSize: 44, fontWeight: 600, letterSpacing: "-0.02em", padding: "2px 0" }}
+              /* value vide tant que 0 → évite l'affichage "05" quand on tape */
+              value={form.price === 0 ? "" : form.price}
+              onChange={e => { const v = e.target.value; update("price", v === "" ? 0 : parseFloat(v) || 0); }}
+            />
+            <span className="tp-serif" style={{ fontSize: 30, fontWeight: 600, color: "var(--text-dim)", flexShrink: 0 }}>€</span>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>Estimation : {eur(estimatedPrice)} (2,50 €/km + horaire)</div>
+
+          <div className="tp-divider" style={{ margin: "14px 0 12px" }}/>
+
+          {/* Détails du calcul */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div>
               <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>Distance (km)</div>
@@ -1677,33 +2250,6 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
               />
             </div>
           </div>
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>Prix forfaitaire TTC</div>
-            <div style={{ position: "relative" }}>
-              <Euro size={16} style={{ position: "absolute", left: 14, top: 14, color: "var(--accent)" }}/>
-              <input
-                className="tp-input"
-                type="number"
-                inputMode="decimal"
-                step="0.01"
-                min="0"
-                placeholder="0"
-                style={{ paddingLeft: 38, fontSize: 18, fontWeight: 700 }}
-                /* Bug fixé : avant on affichait `value={form.price}` avec
-                   form.price=0 par défaut → l'utilisateur tape "5" → l'input
-                   devient "05" parce que le 0 initial reste visible. Astuce :
-                   afficher chaîne vide tant que la valeur est 0, et reparser
-                   à chaque saisie. Comportement naturel : l'utilisateur tape
-                   "50" et voit exactement "50". */
-                value={form.price === 0 ? "" : form.price}
-                onChange={e => {
-                  const v = e.target.value;
-                  update("price", v === "" ? 0 : parseFloat(v) || 0);
-                }}
-              />
-            </div>
-            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>Estimation : {eur(estimatedPrice)} (2,50 €/km + horaire)</div>
-          </div>
         </div>
 
         <div>
@@ -1720,7 +2266,7 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
 
         {!initial?.id && (
           <div className="tp-card" style={{ padding: 12, display: "flex", gap: 10, background: "var(--accent-soft)", borderColor: "var(--accent-ring)" }}>
-            <Coins size={16} style={{ color: "var(--accent)", flexShrink: 0, marginTop: 2 }}/>
+            <Coins size={16} style={{ color: "var(--accent-ink)", flexShrink: 0, marginTop: 2 }}/>
             <div style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.5 }}>
               La création de ce bon consomme <b>1 crédit</b>.
             </div>
@@ -1741,8 +2287,13 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
 /* -------------------------------------------------------------------------
    BOOKING DETAIL
    ------------------------------------------------------------------------- */
-function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplicate }) {
+function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplicate, defaultGps, activeTripId, invoiced }) {
+  const { nav, start: startNav, pick: pickNav, close: closeNav } = useNavigate(defaultGps);
   if (!booking) return null;
+
+  // Destination GPS : dépose si la course est en cours, sinon prise en charge.
+  const enRoute = !!activeTripId && activeTripId === booking.id;
+  const navDest = enRoute ? (booking.dropoffAddress || booking.pickupAddress) : (booking.pickupAddress || booking.dropoffAddress);
 
   // ─── Handlers branchés sur les helpers Capacitor / Web Share / mailto ──
   const summary = booking
@@ -1784,14 +2335,24 @@ function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplica
   return (
     <div className="tp-scroll tp-no-scroll tp-fade-in">
       <TopBar title="Bon de course" subtitle={`Réf. ${booking.id.toUpperCase()}`} onBack={onBack}
-        rightAction={<button onClick={() => onEdit(booking)} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }}><Edit3 size={16}/></button>}/>
+        rightAction={invoiced
+          ? <button onClick={() => alert("Ce bon a déjà été facturé : ses informations ne peuvent plus être modifiées (conformité fiscale).\n\nPour une nouvelle course, utilisez « Dupliquer ».")} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10, opacity: 0.65 }} title="Bon facturé — verrouillé"><Lock size={16}/></button>
+          : <button onClick={() => onEdit(booking)} className="tp-btn tp-btn-ghost" style={{ padding: 8, borderRadius: 10 }}><Edit3 size={16}/></button>}/>
 
       <div style={{ padding: "8px 20px 20px", display: "flex", flexDirection: "column", gap: 16 }}>
+        {invoiced && (
+          <div className="tp-card" style={{ padding: 12, display: "flex", gap: 10, alignItems: "flex-start", background: "var(--warn-soft)", borderColor: "var(--warn)" }}>
+            <Lock size={15} style={{ color: "var(--warn)", flexShrink: 0, marginTop: 1 }}/>
+            <div style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.5 }}>
+              <b>Bon facturé — verrouillé.</b> Ses informations ne peuvent plus être modifiées (conformité fiscale). Pour une nouvelle course, utilisez <b>Dupliquer</b> ci-dessous.
+            </div>
+          </div>
+        )}
         <div className="tp-card-elevated" style={{ padding: 20, position: "relative", overflow: "hidden" }}>
           <div style={{ position: "absolute", top: 0, right: 0, bottom: 0, width: 4, background: "var(--accent)" }}/>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-            <Shield size={14} style={{ color: "var(--accent)" }}/>
-            <div style={{ fontSize: 10, color: "var(--accent)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Bon de transport réglementaire</div>
+            <Shield size={14} style={{ color: "var(--accent-ink)" }}/>
+            <div style={{ fontSize: 10, color: "var(--accent-ink)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Bon de transport réglementaire</div>
           </div>
 
           <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>Réservation préalable</div>
@@ -1813,7 +2374,7 @@ function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplica
           <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>
               <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Prix TTC</div>
-              <div className="tp-serif" style={{ fontSize: 30, fontWeight: 600, color: "var(--accent)", lineHeight: 1 }}>{eur(booking.price)}</div>
+              <div className="tp-serif" style={{ fontSize: 30, fontWeight: 600, color: "var(--accent-ink)", lineHeight: 1 }}>{eur(booking.price)}</div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Forfait</div>
@@ -1838,6 +2399,16 @@ function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplica
           </div>
         )}
 
+        {/* Contacter le client : Appeler · SMS */}
+        {booking.phone && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => callClient(booking.phone)} className="tp-btn tp-btn-ghost" style={{ flex: 1 }}><Phone size={15}/> Appeler</button>
+            <button onClick={() => smsClient(booking.phone, `Bonjour ${booking.customerName || ""}, je suis votre chauffeur VTC pour la course de ${new Date(booking.dateTime).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}.`)} className="tp-btn tp-btn-ghost" style={{ flex: 1 }}><MessageSquare size={15}/> SMS</button>
+          </div>
+        )}
+        {/* Lancer la navigation GPS */}
+        <button onClick={() => startNav(navDest)} className="tp-btn tp-btn-primary" style={{ width: "100%" }}><Navigation size={15}/> Naviguer</button>
+
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <button className="tp-btn tp-btn-ghost" onClick={() => onInvoice(booking)}><Receipt size={15}/> Facturer</button>
           <button onClick={() => onDuplicate && onDuplicate(booking)} className="tp-btn tp-btn-ghost"><Copy size={15}/> Dupliquer</button>
@@ -1850,6 +2421,7 @@ function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplica
           <Trash2 size={15}/> Supprimer le bon
         </button>
       </div>
+      <NavSheet open={nav.open} address={nav.address} onClose={closeNav} onPick={pickNav}/>
     </div>
   );
 }
@@ -1858,7 +2430,7 @@ function Info2({ label, value, accent }) {
   return (
     <div>
       <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 14, fontWeight: 600, color: accent ? "var(--accent)" : "var(--text)" }}>{value}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: accent ? "var(--accent-ink)" : "var(--text)" }}>{value}</div>
     </div>
   );
 }
@@ -2021,7 +2593,7 @@ function InvoicesScreen({ invoices, bookings, tokenBalance, onOpenInvoice, onGoT
         {filtered.map(inv => (
           <button key={inv.id} onClick={() => onOpenInvoice(inv)} className="tp-card"
             style={{ padding: 14, textAlign: "left", cursor: "pointer", background: "var(--surface)", display: "flex", gap: 12, alignItems: "center" }}>
-            <div style={{ width: 42, height: 42, borderRadius: 10, background: "var(--accent-soft)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <div style={{ width: 42, height: 42, borderRadius: 10, background: "var(--accent-soft)", color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <Receipt size={18}/>
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -2029,9 +2601,9 @@ function InvoicesScreen({ invoices, bookings, tokenBalance, onOpenInvoice, onGoT
               <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>{inv.number} · {formatDate(inv.date)}</div>
             </div>
             <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--accent)" }}>{eur(inv.amount)}</div>
+              <div className="tp-serif" style={{ fontSize: 16, fontWeight: 600, color: "var(--text)" }}>{eur(inv.amount)}</div>
               <div className={`tp-chip ${inv.status === "paid" ? "tp-chip-success" : "tp-chip-warn"}`} style={{ marginTop: 4, fontSize: 10, padding: "2px 8px" }}>
-                {inv.status === "paid" ? "Payée" : "En attente"}
+                {inv.status === "paid" ? "Encaissée" : "En attente"}
               </div>
             </div>
           </button>
@@ -2045,6 +2617,13 @@ function InvoicesScreen({ invoices, bookings, tokenBalance, onOpenInvoice, onGoT
    INVOICE DETAIL
    ------------------------------------------------------------------------- */
 function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, currentUser = null, onStatusChanged }) {
+  // ⚠️ Règle des hooks : TOUS les hooks avant tout early-return. Ces états
+  // (aperçu PDF) vivaient après le `return null` → violation détectée par le
+  // lint (crash potentiel si `invoice` change de nullité en cours de vie).
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
   if (!invoice) return null;
 
   // Profil "en dur" pour le PDF : on prend les VRAIES données du compte
@@ -2161,10 +2740,8 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
   // WKWebView et tous les navigateurs modernes savent rendre les PDF
   // nativement via `application/pdf` MIME type. L'utilisateur peut
   // pinch-zoomer comme dans Aperçu macOS / Files iOS.
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-
+  // (états previewOpen/previewUrl/previewLoading déclarés en tête de
+  // composant — règle des hooks.)
   const onPreview = async () => {
     setPreviewLoading(true);
     try {
@@ -2242,7 +2819,7 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
         <div className="tp-card-elevated" style={{ padding: 20 }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 18 }}>
             <div>
-              <div className="tp-serif" style={{ fontSize: 22, fontWeight: 600, color: "var(--accent)" }}>TrajetPro</div>
+              <div className="tp-serif" style={{ fontSize: 22, fontWeight: 600, color: "var(--accent-ink)" }}>TrajetPro</div>
               <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>{DRIVER_PROFILE.companyName}</div>
             </div>
             <div style={{ textAlign: "right" }}>
@@ -2274,7 +2851,7 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 0", borderTop: "1px solid var(--border)", marginTop: 6 }}>
               <span className="tp-serif" style={{ fontSize: 16, fontWeight: 600 }}>Total TTC</span>
-              <span className="tp-serif" style={{ fontSize: 22, fontWeight: 600, color: "var(--accent)" }}>{eur(invoice.amount)}</span>
+              <span className="tp-serif" style={{ fontSize: 22, fontWeight: 600, color: "var(--accent-ink)" }}>{eur(invoice.amount)}</span>
             </div>
           </div>
 
@@ -2362,8 +2939,8 @@ function TokensScreen({ tokenBalance, tokenHistory, onOpenPurchase, onOpenPurcha
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
             <div style={{
               width: 48, height: 48, borderRadius: 12,
-              background: "linear-gradient(135deg, var(--accent), #8B6D2F)",
-              color: "#0B0B0D", display: "flex", alignItems: "center", justifyContent: "center",
+              background: "linear-gradient(135deg, var(--accent), #1E40AF)",
+              color: "var(--accent-on)", display: "flex", alignItems: "center", justifyContent: "center",
               fontSize: 18, fontWeight: 700, fontFamily: "'Fraunces', serif",
             }}>
               {DRIVER_PROFILE.firstName[0]}{DRIVER_PROFILE.lastName[0]}
@@ -2401,18 +2978,18 @@ function TokensScreen({ tokenBalance, tokenHistory, onOpenPurchase, onOpenPurcha
         )}
 
         {/* Balance card */}
-        <div className="tp-card-elevated" style={{ padding: 24, textAlign: "center", position: "relative", overflow: "hidden", background: "linear-gradient(140deg, rgba(244,185,66,0.15), rgba(244,185,66,0.02) 60%)", borderColor: "var(--accent-ring)" }}>
+        <div className="tp-card-elevated" style={{ padding: 24, textAlign: "center", position: "relative", overflow: "hidden", background: "linear-gradient(140deg, rgba(37,99,235,0.15), rgba(37,99,235,0.02) 60%)", borderColor: "var(--accent-ring)" }}>
           <div style={{
             position: "absolute", top: -30, right: -30,
             width: 140, height: 140, borderRadius: "50%",
-            background: "radial-gradient(circle, rgba(244,185,66,0.15), transparent 70%)",
+            background: "radial-gradient(circle, rgba(37,99,235,0.15), transparent 70%)",
             pointerEvents: "none",
           }}/>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 10 }}>
-            <Coins size={16} style={{ color: "var(--accent)" }}/>
-            <div style={{ fontSize: 11, color: "var(--accent)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em" }}>Vous disposez de</div>
+            <Coins size={16} style={{ color: "var(--accent-ink)" }}/>
+            <div style={{ fontSize: 11, color: "var(--accent-ink)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em" }}>Vous disposez de</div>
           </div>
-          <div className="tp-serif" style={{ fontSize: 64, fontWeight: 600, color: "var(--accent)", lineHeight: 1, marginBottom: 6 }}>
+          <div className="tp-serif" style={{ fontSize: 64, fontWeight: 600, color: "var(--accent-ink)", lineHeight: 1, marginBottom: 6 }}>
             {tokenBalance}
           </div>
           <div style={{ fontSize: 14, color: "var(--text)", fontWeight: 600 }}>
@@ -2424,7 +3001,7 @@ function TokensScreen({ tokenBalance, tokenHistory, onOpenPurchase, onOpenPurcha
         </div>
 
         {/* Buy button */}
-        <button onClick={onOpenPurchase} className="tp-btn tp-btn-primary" style={{ width: "100%", padding: "16px", fontSize: 15, boxShadow: "0 8px 24px -10px rgba(244,185,66,0.6)" }}>
+        <button onClick={onOpenPurchase} className="tp-btn tp-btn-primary" style={{ width: "100%", padding: "16px", fontSize: 15, boxShadow: "0 8px 24px -10px rgba(37,99,235,0.6)" }}>
           <Plus size={18}/> Acheter des jetons
         </button>
 
@@ -2436,7 +3013,7 @@ function TokensScreen({ tokenBalance, tokenHistory, onOpenPurchase, onOpenPurcha
           </div>
           <div className="tp-card" style={{ padding: 14, background: "var(--surface)" }}>
             <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Dépensé</div>
-            <div className="tp-serif" style={{ fontSize: 20, fontWeight: 600, marginTop: 4, color: "var(--accent)" }}>{eur(totalSpent)}</div>
+            <div className="tp-serif" style={{ fontSize: 20, fontWeight: 600, marginTop: 4, color: "var(--accent-ink)" }}>{eur(totalSpent)}</div>
           </div>
         </div>
 
@@ -2476,7 +3053,7 @@ function TokensScreen({ tokenBalance, tokenHistory, onOpenPurchase, onOpenPurcha
                       <div className="tp-chip tp-chip-success" style={{ fontSize: 10, padding: "2px 8px" }}>Offert</div>
                     ) : (
                       <>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: "var(--accent)" }}>{eur(h.priceTTC)}</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "var(--accent-ink)" }}>{eur(h.priceTTC)}</div>
                         <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>
                           {h.vatApplied ? `TVA ${eur(h.vatAmount)}` : "Auto-liquidation"}
                         </div>
@@ -2624,7 +3201,7 @@ function PurchaseModal({ open, onClose, onConfirm }) {
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <span className="tp-serif" style={{ fontSize: 22, fontWeight: 600, color: isSelected ? "var(--accent)" : "var(--text)" }}>{p.tokens}</span>
+                          <span className="tp-serif" style={{ fontSize: 22, fontWeight: 600, color: isSelected ? "var(--accent-ink)" : "var(--text)" }}>{p.tokens}</span>
                           <span style={{ fontSize: 12, color: "var(--text-dim)" }}>crédits</span>
                           {p.popular && <span className="tp-chip tp-chip-accent" style={{ fontSize: 9, padding: "2px 7px" }}>Populaire</span>}
                         </div>
@@ -2633,7 +3210,7 @@ function PurchaseModal({ open, onClose, onConfirm }) {
                         </div>
                       </div>
                       <div style={{ textAlign: "right" }}>
-                        <div className="tp-serif" style={{ fontSize: 20, fontWeight: 600, color: isSelected ? "var(--accent)" : "var(--text)" }}>
+                        <div className="tp-serif" style={{ fontSize: 20, fontWeight: 600, color: isSelected ? "var(--accent-ink)" : "var(--text)" }}>
                           {eur(applyReverseCharge ? +(p.priceTTC / 1.2).toFixed(2) : p.priceTTC)}
                         </div>
                         <div style={{ fontSize: 10, color: "var(--text-dim)" }}>
@@ -2674,7 +3251,7 @@ function PurchaseModal({ open, onClose, onConfirm }) {
             <div className="tp-fade-in">
               <div className="tp-card-elevated" style={{ padding: 18, marginBottom: 14 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-                  <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--accent)", color: "#0B0B0D", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--accent)", color: "var(--accent-on)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                     <Coins size={22}/>
                   </div>
                   <div style={{ flex: 1 }}>
@@ -2701,7 +3278,7 @@ function PurchaseModal({ open, onClose, onConfirm }) {
                   )}
                   <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 8, borderTop: "1px solid var(--border)", marginTop: 4 }}>
                     <span className="tp-serif" style={{ fontSize: 16, fontWeight: 600 }}>Total à payer</span>
-                    <span className="tp-serif" style={{ fontSize: 22, fontWeight: 600, color: "var(--accent)" }}>{eur(finalPrice)}</span>
+                    <span className="tp-serif" style={{ fontSize: 22, fontWeight: 600, color: "var(--accent-ink)" }}>{eur(finalPrice)}</span>
                   </div>
                 </div>
 
@@ -2727,9 +3304,9 @@ function PurchaseModal({ open, onClose, onConfirm }) {
                       borderColor: isActive ? "var(--accent)" : "var(--border)",
                       background: isActive ? "var(--accent-soft)" : "var(--surface)",
                     }}>
-                      <m.icon size={18} style={{ color: isActive ? "var(--accent)" : "var(--text-dim)" }}/>
+                      <m.icon size={18} style={{ color: isActive ? "var(--accent-ink)" : "var(--text-dim)" }}/>
                       <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{m.l}</span>
-                      {isActive && <Check size={16} style={{ color: "var(--accent)" }}/>}
+                      {isActive && <Check size={16} style={{ color: "var(--accent-ink)" }}/>}
                     </button>
                   );
                 })}
@@ -2814,7 +3391,7 @@ function PurchaseDetailModal({ open, purchase, onClose }) {
           <div className="tp-card-elevated" style={{ padding: 18, marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
               <div>
-                <div className="tp-serif" style={{ fontSize: 20, fontWeight: 600, color: "var(--accent)" }}>TrajetPro</div>
+                <div className="tp-serif" style={{ fontSize: 20, fontWeight: 600, color: "var(--accent-ink)" }}>TrajetPro</div>
                 <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>Éditeur de logiciel VTC</div>
                 <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 6, lineHeight: 1.5 }}>
                   TrajetPro SAS · 12 rue de la République<br/>
@@ -2859,7 +3436,7 @@ function PurchaseDetailModal({ open, purchase, onClose }) {
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 8, borderTop: "1px solid var(--border)", marginTop: 4 }}>
                 <span className="tp-serif" style={{ fontSize: 16, fontWeight: 600 }}>Total</span>
-                <span className="tp-serif" style={{ fontSize: 22, fontWeight: 600, color: "var(--accent)" }}>{eur(purchase.priceTTC)}</span>
+                <span className="tp-serif" style={{ fontSize: 22, fontWeight: 600, color: "var(--accent-ink)" }}>{eur(purchase.priceTTC)}</span>
               </div>
             </div>
 
@@ -2934,9 +3511,9 @@ function InsufficientModal({ open, onClose, onBuy, action, currentBalance }) {
                   position: "relative",
                 }}>
                   {p.bestValue && (
-                    <div style={{ position: "absolute", top: -6, right: -4, background: "var(--accent)", color: "#0B0B0D", fontSize: 8, fontWeight: 800, padding: "1px 6px", borderRadius: 6, textTransform: "uppercase" }}>Top</div>
+                    <div style={{ position: "absolute", top: -6, right: -4, background: "var(--accent)", color: "var(--accent-on)", fontSize: 8, fontWeight: 800, padding: "1px 6px", borderRadius: 6, textTransform: "uppercase" }}>Top</div>
                   )}
-                  <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600, color: "var(--accent)" }}>{p.tokens}</div>
+                  <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600, color: "var(--accent-ink)" }}>{p.tokens}</div>
                   <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: -2 }}>crédits</div>
                   <div style={{ fontSize: 12, fontWeight: 700, marginTop: 4 }}>{eur(p.priceTTC)}</div>
                 </div>
@@ -3041,7 +3618,7 @@ function AvatarPicker({ currentUser }) {
       ) : (
         <div style={{
           width: 72, height: 72, borderRadius: 18,
-          background: 'linear-gradient(135deg, var(--accent), #8B6D2F)',
+          background: 'linear-gradient(135deg, var(--accent), #1E40AF)',
           color: '#0B0B0D',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: 26, fontWeight: 700, fontFamily: "'Fraunces', serif",
@@ -3102,7 +3679,7 @@ function ValidationBadge({ state }) {
   if (!state || state.status === 'idle') return null;
   if (state.status === 'checking') {
     return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--accent)', fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--accent-ink)', fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>
         <Loader2 size={11} style={{ animation: 'tp-spin 1s linear infinite' }}/> Vérification…
       </span>
     );
@@ -3447,7 +4024,7 @@ function EditProfileModal({ open, currentUser, onClose, onSave }) {
               placeholder="vous@exemple.com"
             />
             <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 6, lineHeight: 1.4 }}>
-              <Info size={10} style={{ display: "inline", verticalAlign: "middle", marginRight: 4, color: "var(--accent)" }}/>
+              <Info size={10} style={{ display: "inline", verticalAlign: "middle", marginRight: 4, color: "var(--accent-ink)" }}/>
               Si vous changez d'email, un lien de confirmation sera envoyé à la
               <b> nouvelle adresse</b>. Le changement est effectif uniquement
               après clic sur ce lien.
@@ -3557,8 +4134,8 @@ function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, 
           ) : (
             <div style={{
               width: 60, height: 60, borderRadius: 16,
-              background: "linear-gradient(135deg, var(--accent), #8B6D2F)",
-              color: "#0B0B0D", display: "flex", alignItems: "center", justifyContent: "center",
+              background: "linear-gradient(135deg, var(--accent), #1E40AF)",
+              color: "var(--accent-on)", display: "flex", alignItems: "center", justifyContent: "center",
               fontSize: 22, fontWeight: 700, fontFamily: "'Fraunces', serif",
               flexShrink: 0,
             }}>
@@ -3638,21 +4215,21 @@ function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, 
           width: "100%", padding: 16, display: "flex", alignItems: "center", gap: 14, cursor: "pointer",
           background: lowTokens
             ? "linear-gradient(135deg, rgba(248,113,113,0.12), rgba(248,113,113,0.02))"
-            : "linear-gradient(135deg, rgba(244,185,66,0.12), rgba(244,185,66,0.02))",
+            : "linear-gradient(135deg, rgba(37,99,235,0.12), rgba(37,99,235,0.02))",
           borderColor: lowTokens ? "rgba(248,113,113,0.3)" : "var(--accent-ring)",
           textAlign: "left",
         }}>
           <div style={{
             width: 48, height: 48, borderRadius: 12,
             background: lowTokens ? "var(--error)" : "var(--accent)",
-            color: "#0B0B0D", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+            color: "var(--accent-on)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
           }}>
             <Wallet size={22}/>
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 700 }}>Gérer mes jetons</div>
             <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 3, display: "flex", alignItems: "center", gap: 6 }}>
-              <span className="tp-serif" style={{ fontSize: 18, fontWeight: 700, color: lowTokens ? "var(--error)" : "var(--accent)" }}>
+              <span className="tp-serif" style={{ fontSize: 18, fontWeight: 700, color: lowTokens ? "var(--error)" : "var(--accent-ink)" }}>
                 {tokenBalance}
               </span>
               <span>crédit{tokenBalance > 1 ? "s" : ""} disponible{tokenBalance > 1 ? "s" : ""}</span>
@@ -3672,7 +4249,7 @@ function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, 
           }}>
             <div style={{
               width: 40, height: 40, borderRadius: 10,
-              background: "var(--accent-soft)", color: "var(--accent)",
+              background: "var(--accent-soft)", color: "var(--accent-ink)",
               display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
             }}>
               <HandCoins size={18}/>
@@ -3704,7 +4281,7 @@ function ProfileScreen({ onGoTab, tokenBalance, currentUser, isGuest, onLogout, 
         <div className="tp-card" style={{ background: "var(--surface)" }}>
           {items.map((it, i) => (
             <div key={it.label} style={{ padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, borderBottom: i < items.length-1 ? "1px solid var(--border)" : "none" }}>
-              <div style={{ width: 34, height: 34, borderRadius: 9, background: "var(--surface-2)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 9, background: "var(--surface-2)", color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 <it.icon size={15}/>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -3827,7 +4404,7 @@ function DeviceBlockedScreen({ onChangeMode, info }) {
           Retour
         </button>
         <a href="mailto:contact@trajetpro.fr" style={{
-          textAlign: "center", fontSize: 12, color: "var(--accent)",
+          textAlign: "center", fontSize: 12, color: "var(--accent-ink)",
           padding: 12, textDecoration: "none", fontWeight: 600,
         }}>
           Contacter le support
@@ -3837,19 +4414,38 @@ function DeviceBlockedScreen({ onChangeMode, info }) {
   );
 }
 
+// Logo de marque TrajetPro : monogramme « V » formé par un trajet (points
+// départ/arrivée), fond dégradé bleu. SVG autoportant (fond arrondi inclus),
+// dimensionnable via `size`. Source : logo-5-monogramme-v-bleu.svg.
+function AppLogo({ size = 80 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TrajetPro">
+      <defs>
+        <linearGradient id="tp-logo-bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#2563EB"/>
+          <stop offset="1" stopColor="#0B3AA8"/>
+        </linearGradient>
+        <linearGradient id="tp-logo-v" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#FFFFFF"/>
+          <stop offset="1" stopColor="#CFE0FF"/>
+        </linearGradient>
+      </defs>
+      <rect width="512" height="512" rx="112" fill="url(#tp-logo-bg)"/>
+      <path d="M150 150L256 372L362 150" fill="none" stroke="url(#tp-logo-v)" strokeWidth="34" strokeLinecap="round" strokeLinejoin="round"/>
+      <circle cx="150" cy="150" r="26" fill="url(#tp-logo-v)"/>
+      <circle cx="150" cy="150" r="11" fill="#0B3AA8"/>
+      <circle cx="362" cy="150" r="18" fill="url(#tp-logo-v)"/>
+    </svg>
+  );
+}
+
 function WelcomeScreen({ onChangeMode, onGuest }) {
   return (
     <div className="tp-scroll tp-fade-in" style={{ minHeight: "100dvh", display: "flex", flexDirection: "column", padding: "40px 24px" }}>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center" }}>
         {/* Logo */}
-        <div style={{
-          width: 80, height: 80, borderRadius: 22,
-          background: "linear-gradient(135deg, var(--accent), #8B6D2F)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          boxShadow: "0 16px 48px -12px rgba(244,185,66,0.5)",
-          marginBottom: 28,
-        }}>
-          <Car size={40} style={{ color: "#0B0B0D" }}/>
+        <div style={{ marginBottom: 28, borderRadius: 22, filter: "drop-shadow(0 16px 40px rgba(37,99,235,0.45))" }}>
+          <AppLogo size={80}/>
         </div>
 
         <div className="tp-serif" style={{ fontSize: 42, fontWeight: 600, lineHeight: 1.05, marginBottom: 8 }}>
@@ -3869,7 +4465,7 @@ function WelcomeScreen({ onChangeMode, onGuest }) {
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left" }}>
               <div style={{
                 width: 32, height: 32, borderRadius: 9,
-                background: "var(--accent-soft)", color: "var(--accent)",
+                background: "var(--accent-soft)", color: "var(--accent-ink)",
                 display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
               }}>
                 <f.icon size={14}/>
@@ -3968,7 +4564,7 @@ function LoginScreen({ onChangeMode, onLogin }) {
           </div>
         </div>
 
-        <button style={{ fontSize: 12, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", textAlign: "right", fontWeight: 600, padding: "4px 2px" }}>
+        <button style={{ fontSize: 12, color: "var(--accent-ink)", background: "none", border: "none", cursor: "pointer", textAlign: "right", fontWeight: 600, padding: "4px 2px" }}>
           Mot de passe oublié ?
         </button>
 
@@ -4013,7 +4609,7 @@ function LoginScreen({ onChangeMode, onLogin }) {
 
         <div style={{ textAlign: "center", fontSize: 12, color: "var(--text-dim)", marginTop: 12 }}>
           Pas encore de compte ?{" "}
-          <button onClick={() => onChangeMode("signup")} style={{ color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 700, padding: 0 }}>
+          <button onClick={() => onChangeMode("signup")} style={{ color: "var(--accent-ink)", background: "none", border: "none", cursor: "pointer", fontWeight: 700, padding: 0 }}>
             S'inscrire
           </button>
         </div>
@@ -4205,7 +4801,7 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
             display: "flex", alignItems: "center", justifyContent: "center",
             border: "2px solid var(--accent-ring)",
           }}>
-            <Mail size={38} style={{ color: "var(--accent)" }}/>
+            <Mail size={38} style={{ color: "var(--accent-ink)" }}/>
           </div>
           <div className="tp-serif" style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.2, marginBottom: 10 }}>
             Vérifiez votre email
@@ -4213,7 +4809,7 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
           <div style={{ fontSize: 13, color: "var(--text-dim)", lineHeight: 1.6, maxWidth: 320, margin: "0 auto" }}>
             Un email de confirmation a été envoyé à<br/>
             <b style={{ color: "var(--text)" }}>{form.email}</b><br/><br/>
-            Cliquez sur le lien reçu pour activer votre compte et recevoir vos <b style={{ color: "var(--accent)" }}>{WELCOME_TOKENS} crédits de bienvenue</b>.
+            Cliquez sur le lien reçu pour activer votre compte et recevoir vos <b style={{ color: "var(--accent-ink)" }}>{WELCOME_TOKENS} crédits de bienvenue</b>.
           </div>
         </div>
 
@@ -4254,7 +4850,7 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
       <div style={{ marginBottom: 24 }}>
         <div className="tp-serif" style={{ fontSize: 30, fontWeight: 600, lineHeight: 1.1 }}>Créer un compte</div>
         <div style={{ fontSize: 13, color: "var(--text-dim)", marginTop: 6 }}>
-          <Gift size={12} style={{ display: "inline", verticalAlign: "middle", color: "var(--accent)" }}/> {WELCOME_TOKENS} crédits offerts après vérification email
+          <Gift size={12} style={{ display: "inline", verticalAlign: "middle", color: "var(--accent-ink)" }}/> {WELCOME_TOKENS} crédits offerts après vérification email
         </div>
       </div>
 
@@ -4326,7 +4922,7 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
           borderColor: hasReferralCode ? "rgba(74,222,128,0.3)" : "var(--border)",
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <HandCoins size={14} style={{ color: hasReferralCode ? "var(--success)" : "var(--accent)" }}/>
+            <HandCoins size={14} style={{ color: hasReferralCode ? "var(--success)" : "var(--accent-ink)" }}/>
             <div style={{ fontSize: 12, fontWeight: 700, color: hasReferralCode ? "var(--success)" : "var(--text)" }}>
               Code de parrainage {!hasReferralCode && <span style={{ color: "var(--text-dim)", fontWeight: 500 }}>(facultatif)</span>}
             </div>
@@ -4341,14 +4937,14 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
             </div>
           ) : (
             <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6, lineHeight: 1.5 }}>
-              Si un ami vous a parrainé, saisissez son code pour gagner <b style={{ color: "var(--accent)" }}>+{REFERRAL_BONUS_REFEREE} crédits</b>.
+              Si un ami vous a parrainé, saisissez son code pour gagner <b style={{ color: "var(--accent-ink)" }}>+{REFERRAL_BONUS_REFEREE} crédits</b>.
             </div>
           )}
         </div>
 
         {/* Security notice */}
         <div className="tp-card" style={{ padding: 12, background: "var(--surface-2)", display: "flex", gap: 10 }}>
-          <Shield size={14} style={{ color: "var(--accent)", flexShrink: 0, marginTop: 2 }}/>
+          <Shield size={14} style={{ color: "var(--accent-ink)", flexShrink: 0, marginTop: 2 }}/>
           <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
             <b style={{ color: "var(--text)" }}>Sécurité :</b> TrajetPro vérifie votre email, votre SIRET et votre appareil pour prévenir les inscriptions frauduleuses. Un seul compte par personne est autorisé.
           </div>
@@ -4375,7 +4971,7 @@ function SignupScreen({ onChangeMode, onSignup, onDeviceAlreadyUsed }) {
 
         <div style={{ textAlign: "center", fontSize: 12, color: "var(--text-dim)", marginTop: 12 }}>
           Déjà inscrit ?{" "}
-          <button onClick={() => onChangeMode("login")} style={{ color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 700, padding: 0 }}>
+          <button onClick={() => onChangeMode("login")} style={{ color: "var(--accent-ink)", background: "none", border: "none", cursor: "pointer", fontWeight: 700, padding: 0 }}>
             Se connecter
           </button>
         </div>
@@ -4419,7 +5015,7 @@ function ReferralScreen({ user, onBack }) {
         {/* Hero card with code */}
         <div className="tp-card-elevated" style={{
           padding: 22,
-          background: "linear-gradient(135deg, rgba(244,185,66,0.2), rgba(244,185,66,0.02) 70%)",
+          background: "linear-gradient(135deg, rgba(37,99,235,0.2), rgba(37,99,235,0.02) 70%)",
           borderColor: "var(--accent-ring)",
           textAlign: "center",
           position: "relative",
@@ -4428,18 +5024,18 @@ function ReferralScreen({ user, onBack }) {
           <div style={{
             position: "absolute", top: -40, right: -40,
             width: 150, height: 150, borderRadius: "50%",
-            background: "radial-gradient(circle, rgba(244,185,66,0.2), transparent 70%)",
+            background: "radial-gradient(circle, rgba(37,99,235,0.2), transparent 70%)",
             pointerEvents: "none",
           }}/>
           <div style={{
             width: 56, height: 56, margin: "0 auto 14px",
-            borderRadius: 16, background: "var(--accent)", color: "#0B0B0D",
+            borderRadius: 16, background: "var(--accent)", color: "var(--accent-on)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            boxShadow: "0 8px 24px -6px rgba(244,185,66,0.5)",
+            boxShadow: "0 8px 24px -6px rgba(37,99,235,0.5)",
           }}>
             <HandCoins size={28}/>
           </div>
-          <div style={{ fontSize: 11, color: "var(--accent)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 6 }}>
+          <div style={{ fontSize: 11, color: "var(--accent-ink)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 6 }}>
             Votre code personnel
           </div>
           <div className="tp-serif" style={{ fontSize: 34, fontWeight: 600, color: "var(--text)", fontFamily: "'Fraunces', monospace", letterSpacing: "0.05em", marginBottom: 16 }}>
@@ -4467,7 +5063,7 @@ function ReferralScreen({ user, onBack }) {
               <div key={s.num} style={{ display: "flex", gap: 12 }}>
                 <div style={{
                   width: 26, height: 26, borderRadius: 13,
-                  background: "var(--accent)", color: "#0B0B0D",
+                  background: "var(--accent)", color: "var(--accent-on)",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontSize: 12, fontWeight: 700, flexShrink: 0,
                   fontFamily: "'Fraunces', serif",
@@ -4493,7 +5089,7 @@ function ReferralScreen({ user, onBack }) {
             <div style={{ display: "flex", alignItems: "center", gap: 4, color: "var(--text-dim)", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
               <Coins size={11}/> Gagnés
             </div>
-            <div className="tp-serif" style={{ fontSize: 24, fontWeight: 600, marginTop: 4, color: "var(--accent)" }}>+{stats.tokensEarned}</div>
+            <div className="tp-serif" style={{ fontSize: 24, fontWeight: 600, marginTop: 4, color: "var(--accent-ink)" }}>+{stats.tokensEarned}</div>
           </div>
         </div>
 
@@ -4515,7 +5111,7 @@ function ReferralScreen({ user, onBack }) {
                 }}>
                   <div style={{
                     width: 36, height: 36, borderRadius: 10,
-                    background: "var(--surface-2)", color: "var(--accent)",
+                    background: "var(--surface-2)", color: "var(--accent-ink)",
                     display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
                     fontSize: 13, fontWeight: 700, fontFamily: "'Fraunces', serif",
                   }}>
@@ -4777,9 +5373,9 @@ function BillingScreen({ onBack, invoiceSettings = {}, onUpdateInvoiceSettings }
         })}
 
         {/* Astuce */}
-        <div className="tp-card" style={{ padding: 12, background: "rgba(244,185,66,0.08)", borderColor: "rgba(244,185,66,0.2)" }}>
+        <div className="tp-card" style={{ padding: 12, background: "rgba(37,99,235,0.08)", borderColor: "rgba(37,99,235,0.2)" }}>
           <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
-            <Info size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 6, color: "var(--accent)" }}/>
+            <Info size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 6, color: "var(--accent-ink)" }}/>
             Le <b>nom de société</b>, le <b>SIRET</b> et l'<b>adresse</b> personnelle sont gérés depuis <b>Profil → Modifier mes infos</b>.
           </div>
         </div>
@@ -4849,6 +5445,11 @@ function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount, in
       ]
     },
     {
+      title: "Navigation", items: [
+        { id: "defaultGps", icon: Navigation, label: "GPS par défaut", value: preferences.defaultGps || "ask", options: [{v:"ask", l:"Demander"},{v:"google", l:"Google Maps"},{v:"waze", l:"Waze"},{v:"apple", l:"Plans (Apple)"}] },
+      ]
+    },
+    {
       title: "Sécurité & données", items: [
         { id: "bio", icon: Fingerprint, label: "Biométrie", type: "toggle", value: preferences.biometric },
         { id: "backup", icon: Cloud, label: "Sauvegarde automatique", type: "toggle", value: preferences.autoBackup },
@@ -4872,7 +5473,7 @@ function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount, in
                 }}>
                   <div style={{
                     width: 34, height: 34, borderRadius: 9,
-                    background: "var(--surface-2)", color: "var(--accent)",
+                    background: "var(--surface-2)", color: "var(--accent-ink)",
                     display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
                   }}>
                     <it.icon size={15}/>
@@ -4922,7 +5523,7 @@ function SettingsScreen({ onBack, preferences, onChangePref, onDeleteAccount, in
             }}>
             <div style={{
               width: 36, height: 36, borderRadius: 9, background: "var(--accent-soft)",
-              color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+              color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
             }}>
               <Receipt size={16}/>
             </div>
@@ -5068,7 +5669,7 @@ function TermsScreen({ onBack }) {
 
       <div style={{ padding: "0 20px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
         <div className="tp-card" style={{ padding: 14, background: "var(--accent-soft)", borderColor: "var(--accent-ring)", display: "flex", gap: 10 }}>
-          <Info size={16} style={{ color: "var(--accent)", flexShrink: 0, marginTop: 2 }}/>
+          <Info size={16} style={{ color: "var(--accent-ink)", flexShrink: 0, marginTop: 2 }}/>
           <div style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.5 }}>
             En utilisant TrajetPro, vous reconnaissez avoir lu et accepté les présentes conditions générales.
           </div>
@@ -5124,13 +5725,13 @@ function HelpScreen({ onBack }) {
           }}>
             <div style={{
               width: 44, height: 44, borderRadius: 11, background: "var(--accent-soft)",
-              color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+              color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
             }}><Mail size={20}/></div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14, fontWeight: 700 }}>Nous contacter par email</div>
               <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>contact@trajetpro.fr · réponse sous 24h ouvrées</div>
             </div>
-            <ArrowUpRight size={16} style={{ color: "var(--accent)", flexShrink: 0 }}/>
+            <ArrowUpRight size={16} style={{ color: "var(--accent-ink)", flexShrink: 0 }}/>
           </a>
         </div>
 
@@ -5323,7 +5924,7 @@ function AgendaModal({ open, onClose, bookings, onOpenBooking }) {
                         onClick={() => { onClose(); onOpenBooking(b); }}
                         className="tp-card"
                         style={{ padding: 12, display: "flex", gap: 12, alignItems: "center", textAlign: "left", cursor: "pointer", background: "var(--surface)" }}>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: "var(--accent)", minWidth: 50 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "var(--accent-ink)", minWidth: 50 }}>
                           {new Date(b.dateTime).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
@@ -5424,7 +6025,7 @@ function NavItem({ icon: Icon, label, active, onClick, badge, badgeColor }) {
             position: "absolute", top: -4, right: -6,
             minWidth: 14, height: 14, borderRadius: 7,
             background: badgeColor === "error" ? "var(--error)" : "var(--accent)",
-            color: "#0B0B0D", fontSize: 9, fontWeight: 700,
+            color: "var(--accent-on)", fontSize: 9, fontWeight: 700,
             display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px",
           }}>{badge}</div>
         )}
@@ -5440,7 +6041,7 @@ function NavItem({ icon: Icon, label, active, onClick, badge, badgeColor }) {
 
 // Préférences utilisateur par défaut
 const DEFAULT_PREFERENCES = {
-  language: "fr", currency: "EUR", theme: "dark",
+  language: "fr", currency: "EUR", theme: "light", defaultGps: "ask",
   notifRides: true, notifInvoices: true, notifMarketing: false,
   // Quand recevoir les rappels avant une course (offsets sélectionnés
   // depuis ALL_REMINDER_OFFSETS dans notifications.js).
@@ -5565,8 +6166,94 @@ function profileFromDb(row) {
   };
 }
 
+/* -------------------------------------------------------------------------
+   SPLASH SCREEN — démarrage premium (façon Planity / Uber)
+   -------------------------------------------------------------------------
+   Logo centré (fondu + léger zoom, ~600ms) + barre de progression très fine
+   pendant que l'app précharge (session, profil, préférences, thème, données).
+   Durée minimale 1s pour une sensation premium, puis sortie fondu + glissement
+   vers l'écran suivant (aucun écran blanc : même fond que l'app). Si la
+   connexion manque et que le boot cale, affiche un écran de reprise élégant. */
+function SplashScreen({ ready, online, onRetry, onFinish }) {
+  const [minElapsed, setMinElapsed] = useState(false);   // durée mini premium atteinte
+  const [showOffline, setShowOffline] = useState(false); // boot calé + hors-ligne
+  const [exiting, setExiting] = useState(false);         // animation de sortie en cours
+  const exitStartedRef = useRef(false);                  // garde : sortie déclenchée une seule fois
+
+  // Durée minimale de 1s (sensation premium même si le chargement est instantané).
+  useEffect(() => {
+    const t = setTimeout(() => setMinElapsed(true), 1000);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Filet de sécurité : si le boot n'est pas prêt ET qu'on est hors-ligne
+  // depuis > 2,2s, on propose un écran de reprise. Dès que la connexion
+  // revient (ou que le boot aboutit), on le masque.
+  useEffect(() => {
+    if (ready) { setShowOffline(false); return; }
+    if (online) { setShowOffline(false); return; }
+    const t = setTimeout(() => setShowOffline(true), 2200);
+    return () => clearTimeout(t);
+  }, [online, ready]);
+
+  // Sortie : prêt + durée mini écoulée + pas d'écran d'erreur → fade + slide.
+  // ⚠️ On ne met PAS `exiting` en dépendance et on ne nettoie PAS le timeout :
+  // sinon la ré-exécution de l'effet (quand `exiting` passe à true) annulerait
+  // le setTimeout avant qu'`onFinish` ne s'exécute → splash bloqué invisible.
+  // Le ref garantit un déclenchement unique.
+  useEffect(() => {
+    if (ready && minElapsed && !showOffline && !exitStartedRef.current) {
+      exitStartedRef.current = true;
+      setExiting(true);
+      setTimeout(() => onFinish(), 440);
+    }
+  }, [ready, minElapsed, showOffline, onFinish]);
+
+  return (
+    <div
+      className={exiting ? "splash-exit" : undefined}
+      style={{
+        position: "absolute", inset: 0, zIndex: 3000,
+        background: "var(--bg-gradient)",
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        padding: 24, textAlign: "center",
+        paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)",
+      }}
+    >
+      <div className="splash-logo-in">
+        <AppLogo size={96}/>
+      </div>
+
+      {showOffline ? (
+        <div className="tp-fade-in" style={{ marginTop: 30, maxWidth: 260 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, borderRadius: 12, background: "var(--error-soft)", color: "var(--error)", marginBottom: 12 }}>
+            <Cloud size={20}/>
+          </div>
+          <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600, color: "var(--text)" }}>Pas de connexion</div>
+          <div style={{ fontSize: 13, color: "var(--text-dim)", marginTop: 6, lineHeight: 1.5 }}>
+            Vérifiez votre connexion Internet, puis réessayez.
+          </div>
+          <button onClick={onRetry} className="tp-btn tp-btn-primary" style={{ marginTop: 18, padding: "11px 22px", borderRadius: 13 }}>
+            <Loader2 size={15}/> Réessayer
+          </button>
+        </div>
+      ) : (
+        <div className="splash-track" style={{ marginTop: 30 }} role="progressbar" aria-label="Chargement">
+          <span/>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   // --- Auth state ---
+  // Splash animé au démarrage : reste affiché tant que le boot n'est pas prêt
+  // (min. 1s), puis se retire en fondu/glissement pour révéler l'écran suivant.
+  const [splashActive, setSplashActive] = useState(true);
+  // Course actuellement « en route » (chauffeur en chemin vers le client) →
+  // active le suivi GPS live sur le hero de l'Accueil. null = aucune.
+  const [activeTripId, setActiveTripId] = useState(null);
   // authScreen: "welcome" | "login" | "signup" | "device_blocked" | null
   const [authScreen, setAuthScreen] = useState("welcome");
   const [currentUser, setCurrentUser] = useState(null);
@@ -5659,10 +6346,20 @@ export default function App() {
       try {
         const saved = await preferencesGet('theme');
         if (cancelled) return;
-        if (saved === 'light') {
+        // Défaut = clair (posé dans main.jsx). On ne bascule en sombre que
+        // si l'utilisateur l'a explicitement choisi dans les Réglages.
+        if (saved === 'dark') {
+          document.documentElement.removeAttribute('data-theme');
+          setPreferences((p) => ({ ...p, theme: 'dark' }));
+        } else {
           document.documentElement.setAttribute('data-theme', 'light');
           setPreferences((p) => ({ ...p, theme: 'light' }));
         }
+        // GPS par défaut (Google Maps / Waze / Plans / demander à chaque fois).
+        try {
+          const gps = await preferencesGet('defaultGps');
+          if (gps && !cancelled) setPreferences((p) => ({ ...p, defaultGps: gps }));
+        } catch {}
       } catch {}
     })();
     return () => { cancelled = true; };
@@ -6232,6 +6929,11 @@ export default function App() {
         setFormOpen(false);
         setPendingActionLabel("créer ce bon de course");
         setInsufficientOpen(true);
+      } else if (/factur[ée]/i.test(msg)) {
+        // Filet serveur : le trigger a refusé la modif d'un bon déjà facturé.
+        setFormOpen(false);
+        setFormInitial(null);
+        alert("Ce bon a déjà été facturé : ses informations ne peuvent plus être modifiées (conformité fiscale).\n\nUtilisez « Dupliquer » pour une nouvelle course.");
       } else {
         alert(`Erreur : ${msg}`);
       }
@@ -6471,6 +7173,14 @@ export default function App() {
       return;
     }
 
+    // GPS par défaut : persiste via Capacitor Preferences (comme le thème) pour
+    // conserver le choix entre les sessions.
+    if (key === 'defaultGps') {
+      try { await preferencesSet('defaultGps', value); } catch { /* best effort */ }
+      setPreferences(p => ({ ...p, defaultGps: value }));
+      return;
+    }
+
     const mapping = {
       lang: "language", currency: "currency",
       notif_rides: "notifRides", notif_invoices: "notifInvoices", notif_marketing: "notifMarketing",
@@ -6488,17 +7198,22 @@ export default function App() {
   // se restaure (~500ms à 2s) et clique impatient sur "Se connecter",
   // déclenchant un signInWithPassword qui se met en concurrence avec
   // getSession et provoque deadlock + double SIGNED_IN.
-  if (!authChecked) {
+  // Splash animé premium : reste tant que le boot n'est pas prêt (min 1s),
+  // puis se retire en fondu/glissement. `ready={authChecked}` = préchargement
+  // terminé (session, profil, préférences, thème, données). Aucun écran blanc :
+  // même fond que l'app, et l'écran suivant est déjà décidé quand on révèle.
+  if (splashActive) {
     return (
       <>
         <GlobalStyles/>
         <div className="tp-root">
-          <div className="tp-phone" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div style={{ textAlign: 'center', color: 'var(--text-dim)' }}>
-              <Loader2 size={32} style={{ animation: 'tp-spin 1s linear infinite', color: 'var(--accent)' }}/>
-              <div className="tp-serif" style={{ fontSize: 18, fontWeight: 600, marginTop: 14, color: 'var(--text)' }}>TrajetPro</div>
-              <div style={{ fontSize: 12, marginTop: 4 }}>Chargement…</div>
-            </div>
+          <div className="tp-phone">
+            <SplashScreen
+              ready={authChecked}
+              online={isOnline}
+              onRetry={() => window.location.reload()}
+              onFinish={() => setSplashActive(false)}
+            />
           </div>
         </div>
       </>
@@ -6541,6 +7256,7 @@ export default function App() {
   if (detailBooking) {
     screen = <BookingDetail
       booking={detailBooking}
+      invoiced={invoices.some(i => i.bookingId === detailBooking.id)}
       onBack={() => setDetailBooking(null)}
       onEdit={(b) => { setDetailBooking(null); setFormInitial(b); setFormOpen(true); }}
       onDuplicate={(b) => {
@@ -6559,6 +7275,8 @@ export default function App() {
       }}
       onDelete={onDeleteBooking}
       onInvoice={onInvoiceBooking}
+      defaultGps={preferences.defaultGps}
+      activeTripId={activeTripId}
     />;
   } else if (detailInvoice) {
     const relatedBooking = bookings.find(b => b.id === detailInvoice.bookingId);
@@ -6599,7 +7317,11 @@ export default function App() {
           onOpenBooking={setDetailBooking} onGoTab={setTab}
           onOpenPurchase={() => setPurchaseOpen(true)}
           onPromptSignup={onPromptSignup}
-          setAgendaOpen={setAgendaOpen}/>;
+          setAgendaOpen={setAgendaOpen}
+          activeTripId={activeTripId}
+          onStartTrip={(b) => setActiveTripId(b.id)}
+          onEndTrip={() => setActiveTripId(null)}
+          defaultGps={preferences.defaultGps}/>;
         break;
       case "bookings":
         screen = <BookingsScreen bookings={bookings} tokenBalance={tokenBalance}
