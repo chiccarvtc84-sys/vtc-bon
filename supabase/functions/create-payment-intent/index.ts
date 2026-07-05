@@ -2,7 +2,7 @@
 // EDGE FUNCTION : create-payment-intent
 // ============================================================================
 // Crée un Stripe PaymentIntent pour un achat de pack de crédits via Apple Pay
-// natif (sheet PassKit iOS) ou Google Pay. Pas de page Checkout web — l'app
+// natif (sheet PassKit iOS). Pas de page Checkout web — l'app
 // récupère un clientSecret et déclenche directement la sheet de paiement
 // native via @capacitor-community/stripe.
 //

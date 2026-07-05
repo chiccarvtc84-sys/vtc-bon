@@ -3479,8 +3479,7 @@ function PurchaseModal({ open, onClose, onConfirm }) {
       vatApplied: !applyReverseCharge,
       vatIntra: showVatField ? vatIntra.toUpperCase() : "",
       paymentMethod:
-        paymentMethod === "card" ? "Carte bancaire" :
-        paymentMethod === "applepay" ? "Apple Pay" : "Google Pay",
+        paymentMethod === "applepay" ? "Apple Pay" : "Carte bancaire",
     };
 
     try {
@@ -3584,7 +3583,7 @@ function PurchaseModal({ open, onClose, onConfirm }) {
                   <Lock size={10}/> Conditions d'achat
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                  <div>• Paiement sécurisé via prestataire agréé (Stripe, Apple Pay, Google Pay).</div>
+                  <div>• Paiement sécurisé via prestataire agréé (Stripe, Apple Pay).</div>
                   <div>• TVA française 20% appliquée. Auto-liquidation possible avec un n° TVA intracommunautaire valide (hors France), art. 283-2 du CGI.</div>
                   <div>• Les crédits achetés <b>n'expirent pas</b> et restent disponibles sans limite de durée.</div>
                   <div>• Achat ferme et définitif. Non remboursable sauf dysfonctionnement technique prouvé imputable à l'éditeur.</div>
@@ -3648,7 +3647,6 @@ function PurchaseModal({ open, onClose, onConfirm }) {
                 {[
                   { v: "card", l: "Carte bancaire", icon: CreditCard },
                   { v: "applepay", l: "Apple Pay", icon: ShieldCheck },
-                  { v: "googlepay", l: "Google Pay", icon: ShieldCheck },
                 ].map(m => {
                   const isActive = paymentMethod === m.v;
                   return (
