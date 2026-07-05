@@ -6,6 +6,7 @@ import {
   Calendar, ChevronRight, ChevronLeft, Search, Check,
   Phone, Mail, Share2, QrCode, Euro, X,
   Navigation, Car, Shield, Settings, Building2,
+  TrainFront, Plane, Hotel, Cross, Utensils, ShoppingBag, Fuel, GraduationCap, Landmark,
   AlertCircle, Edit3, Trash2, Download, Send,
   Sparkles, CreditCard, FileCheck, TrendingUp,
   Fingerprint, Loader2, CheckCircle2, ArrowUpRight,
@@ -55,6 +56,7 @@ import { checkPasswordStrength, isPasswordPwned } from './lib/passwordSecurity.j
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { geocode, routeBetween } from './lib/geocode.js';
+import { searchPlaces, fmtDistance, distanceKm as placeDistanceKm, etaMinutes as placeEtaMinutes, loadRecents, loadFavorites, addRecent, toggleFavorite, isFavorite } from './lib/places.js';
 import {
   isBiometricAvailable,
   isBiometricEnabled,
@@ -664,6 +666,41 @@ const GlobalStyles = () => (
     }
 
     @keyframes tp-spin { to { transform: rotate(360deg); } }
+
+    /* ─── RECHERCHE D'ADRESSES (façon Uber Driver) ──────────────────── */
+    .place-panel {
+      position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 40;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+      box-shadow: 0 14px 36px rgba(22,23,27,0.16); max-height: 340px; overflow-y: auto;
+      padding: 6px; -webkit-overflow-scrolling: touch;
+    }
+    .place-sec {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--text-dim); padding: 9px 10px 4px; display: flex; align-items: center; gap: 6px;
+    }
+    .place-card {
+      width: 100%; display: flex; align-items: center; gap: 11px; padding: 9px 10px;
+      border-radius: 12px; background: transparent; border: none; cursor: pointer; text-align: left;
+      transition: background 0.12s ease; animation: place-in 0.18s ease both;
+    }
+    .place-card:hover { background: var(--surface-2); }
+    .place-card:active { transform: scale(0.985); }
+    .place-ic {
+      width: 38px; height: 38px; border-radius: 11px; background: var(--accent-soft);
+      color: var(--accent-ink); display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .place-mid { flex: 1; min-width: 0; }
+    .place-name { font-size: 14px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .place-addr { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .place-addr > span.addr-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .place-right { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; }
+    .place-dist { font-size: 12.5px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+    .place-eta { font-size: 11px; color: var(--accent-ink); font-weight: 600; }
+    .place-near { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; color: var(--success); background: var(--success-soft); padding: 2px 6px; border-radius: 6px; }
+    .place-star { flex-shrink: 0; padding: 6px; background: none; border: none; cursor: pointer; color: var(--muted); display: flex; }
+    .place-star.on { color: var(--accent-ink); }
+    @keyframes place-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { .place-card { animation: none; } }
 
     /* ─── SPLASH SCREEN (démarrage premium) ─────────────────────────── */
     /* Logo : fondu + léger zoom 0.9 → 1.0, ~600ms, courbe douce. */
@@ -1937,6 +1974,184 @@ function FieldRow({ icon: Icon, label, value, detected, uncertain }) {
 }
 
 /* -------------------------------------------------------------------------
+   RECHERCHE D'ADRESSES — champ intelligent façon Uber Driver
+   ------------------------------------------------------------------------- */
+// Position GPS courante (one-shot, mise en cache par le système). Sert à
+// biaiser la recherche et calculer les distances. Repli silencieux si refusé.
+function useCurrentPosition() {
+  const [pos, setPos] = useState(null);
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) return;
+    let cancelled = false;
+    navigator.geolocation.getCurrentPosition(
+      (p) => { if (!cancelled) setPos({ lat: p.coords.latitude, lng: p.coords.longitude }); },
+      () => { /* refusé / indispo → repli côté places.js */ },
+      { enableHighAccuracy: false, maximumAge: 60000, timeout: 8000 }
+    );
+    return () => { cancelled = true; };
+  }, []);
+  return pos;
+}
+
+// Icône lucide par catégorie de lieu.
+const PLACE_ICONS = {
+  train: TrainFront, plane: Plane, hotel: Hotel, hospital: Cross, food: Utensils,
+  shopping: ShoppingBag, fuel: Fuel, school: GraduationCap, landmark: Landmark,
+  city: Building2, home: Home, business: Building2, default: MapPin,
+};
+const PlaceIcon = ({ cat, size = 18 }) => {
+  const Ico = PLACE_ICONS[cat?.key] || MapPin;
+  return <Ico size={size}/>;
+};
+
+// Champ de recherche d'adresse : suggestions temps réel en cartes (nom en gras,
+// adresse en dessous, icône catégorie, distance + temps à droite, badge
+// "À proximité"), + récentes / favorites / fréquentes quand le champ est vide.
+function AddressSearchField({ value, onChange, placeholder, near, frequent = [] }) {
+  const [query, setQuery] = useState(value || "");
+  const [open, setOpen] = useState(false);
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [recents, setRecents] = useState([]);
+  const [favorites, setFavorites] = useState([]);
+  const abortRef = useRef(null);
+  const debRef = useRef(null);
+  const blurRef = useRef(null);
+
+  useEffect(() => { setQuery(value || ""); }, [value]);
+  useEffect(() => { loadRecents().then(setRecents); loadFavorites().then(setFavorites); }, []);
+
+  const runSearch = (q) => {
+    if (abortRef.current) abortRef.current.abort();
+    if ((q || "").trim().length < 2) { setResults([]); setLoading(false); return; }
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setLoading(true);
+    searchPlaces(q, near, ctrl.signal)
+      .then((r) => { setResults(r); setLoading(false); })
+      .catch((e) => { if (!e || e.name !== "AbortError") { setResults([]); setLoading(false); } });
+  };
+
+  const onType = (v) => {
+    setQuery(v);
+    if (debRef.current) clearTimeout(debRef.current);
+    debRef.current = setTimeout(() => runSearch(v), 320);
+  };
+
+  const commit = (place) => {
+    const val = place.value || place.name;
+    setQuery(val);
+    onChange(val);
+    setOpen(false);
+    if (place.lat != null) addRecent(place).then(setRecents);
+  };
+
+  const onStar = (e, place) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleFavorite(place).then(setFavorites);
+  };
+
+  const Card = ({ place, showStar = true }) => {
+    const nearby = place.distanceKm != null && place.distanceKm <= 8;
+    const fav = isFavorite(favorites, place);
+    return (
+      <div className="place-card" role="button" tabIndex={0}
+        onMouseDown={(e) => e.preventDefault()}   /* évite le blur avant le clic */
+        onClick={() => commit(place)}>
+        <div className="place-ic"><PlaceIcon cat={place.category}/></div>
+        <div className="place-mid">
+          <div className="place-name">{place.name}</div>
+          {(nearby || place.address) && (
+            <div className="place-addr">
+              {nearby && <span className="place-near">À proximité</span>}
+              {place.address && <span className="addr-txt">{place.address}</span>}
+            </div>
+          )}
+        </div>
+        {place.distanceKm != null && (
+          <div className="place-right">
+            <div className="place-dist">{fmtDistance(place.distanceKm)}</div>
+            {place.etaMin != null && <div className="place-eta">{place.etaMin} min</div>}
+          </div>
+        )}
+        {showStar && place.lat != null && (
+          <button className={`place-star ${fav ? "on" : ""}`} onMouseDown={(e) => e.preventDefault()} onClick={(e) => onStar(e, place)} aria-label="Favori">
+            <Star size={16} fill={fav ? "currentColor" : "none"}/>
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  // Enrichit un lieu d'historique (récente/favorite) avec la distance/temps
+  // depuis la position courante, s'il a des coordonnées.
+  const enrich = (p) => {
+    if (p.lat != null && near) {
+      const dk = placeDistanceKm(near, { lat: p.lat, lng: p.lng });
+      return { ...p, distanceKm: dk, etaMin: placeEtaMinutes(dk) };
+    }
+    return { ...p, distanceKm: null, etaMin: null };
+  };
+
+  const showEmptyState = query.trim().length < 2;
+  const hasHistory = favorites.length || recents.length || frequent.length;
+
+  return (
+    <div style={{ position: "relative" }}>
+      <input
+        className="tp-input"
+        placeholder={placeholder}
+        value={query}
+        onChange={(e) => onType(e.target.value)}
+        onFocus={() => { if (blurRef.current) clearTimeout(blurRef.current); setOpen(true); if (query.trim().length >= 2 && !results.length) runSearch(query); }}
+        onBlur={() => {
+          blurRef.current = setTimeout(() => {
+            setOpen(false);
+            // Accepte aussi une adresse tapée à la main sans sélection.
+            if (query.trim() && query !== value) onChange(query.trim());
+          }, 160);
+        }}
+      />
+      {open && (
+        <div className="place-panel tp-fade-in">
+          {showEmptyState ? (
+            hasHistory ? (
+              <>
+                {favorites.length > 0 && <>
+                  <div className="place-sec"><Star size={11}/> Favoris</div>
+                  {favorites.slice(0, 4).map((p) => <Card key={"f" + p.value} place={enrich(p)}/>)}
+                </>}
+                {recents.length > 0 && <>
+                  <div className="place-sec"><History size={11}/> Récentes</div>
+                  {recents.slice(0, 5).map((p) => <Card key={"r" + p.value} place={enrich(p)}/>)}
+                </>}
+                {frequent.length > 0 && <>
+                  <div className="place-sec"><TrendingUp size={11}/> Fréquentes</div>
+                  {frequent.slice(0, 4).map((p) => <Card key={"q" + p.value} place={p} showStar={false}/>)}
+                </>}
+              </>
+            ) : (
+              <div style={{ padding: "16px 12px", fontSize: 12.5, color: "var(--text-dim)", textAlign: "center" }}>
+                Tapez une adresse, un lieu (« Gare », « Aéroport », « Hôpital »…) ou une ville.
+              </div>
+            )
+          ) : loading && results.length === 0 ? (
+            <div style={{ padding: "16px 12px", fontSize: 12.5, color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
+              <Loader2 size={15} style={{ animation: "tp-spin 1s linear infinite", color: "var(--accent-ink)" }}/> Recherche…
+            </div>
+          ) : results.length === 0 ? (
+            <div style={{ padding: "16px 12px", fontSize: 12.5, color: "var(--text-dim)", textAlign: "center" }}>Aucun résultat près de vous.</div>
+          ) : (
+            results.map((p) => <Card key={p.id} place={p}/>)
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------
    BOOKING FORM
    ------------------------------------------------------------------------- */
 function BookingForm({ initial, bookings = [], onCancel, onSave }) {
@@ -1992,6 +2207,26 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
   useEffect(() => { if (!form.price) setForm(f => ({ ...f, price: Math.round(estimatedPrice) })); }, []); // eslint-disable-line
 
   const update = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  // Position GPS courante → biaise la recherche d'adresses + distances.
+  const userPos = useCurrentPosition();
+
+  // Adresses les plus fréquentes du chauffeur (depuis ses courses passées) —
+  // proposées quand un champ d'adresse est vide.
+  const frequentAddresses = useMemo(() => {
+    const m = new Map();
+    for (const b of bookings) {
+      for (const addr of [b.pickupAddress, b.dropoffAddress]) {
+        const k = (addr || "").trim();
+        if (k) m.set(k, (m.get(k) || 0) + 1);
+      }
+    }
+    return [...m.entries()]
+      .filter(([, c]) => c >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([name, count]) => ({ name, address: `${count} course${count > 1 ? "s" : ""}`, value: name, category: { key: "history" } }));
+  }, [bookings]);
 
   const filterAddrs = (q) => {
     const s = (q || "").toLowerCase().trim();
@@ -2109,63 +2344,30 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
                 <span style={{ width: 2, flex: 1, minHeight: 30, margin: "5px 0", background: "repeating-linear-gradient(var(--muted) 0 3px, transparent 3px 6px)" }}/>
                 <span style={{ width: 12, height: 12, borderRadius: 3, background: "var(--accent)", flexShrink: 0 }}/>
               </div>
-              {/* Champs départ / arrivée */}
+              {/* Champs départ / arrivée — recherche intelligente (cartes, catégories, distance/temps) */}
               <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 12 }}>
                 <div>
                   <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Départ</div>
-                  <input className="tp-input" placeholder="Adresse de départ"
-                    value={form.pickupAddress} onChange={e => update("pickupAddress", e.target.value)}
-                    onFocus={() => { setPickupSuggestOpen(true); setDropoffSuggestOpen(false); }}/>
+                  <AddressSearchField
+                    value={form.pickupAddress}
+                    onChange={(v) => update("pickupAddress", v)}
+                    placeholder="Adresse de départ"
+                    near={userPos}
+                    frequent={frequentAddresses}
+                  />
                 </div>
                 <div>
                   <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Arrivée</div>
-                  <input className="tp-input" placeholder="Adresse d'arrivée"
-                    value={form.dropoffAddress} onChange={e => update("dropoffAddress", e.target.value)}
-                    onFocus={() => { setDropoffSuggestOpen(true); setPickupSuggestOpen(false); }}/>
+                  <AddressSearchField
+                    value={form.dropoffAddress}
+                    onChange={(v) => update("dropoffAddress", v)}
+                    placeholder="Adresse d'arrivée"
+                    near={userPos}
+                    frequent={frequentAddresses}
+                  />
                 </div>
               </div>
             </div>
-
-            {/* Suggestions (départ) */}
-            {pickupSuggestOpen && (
-              <div className="tp-fade-in" style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", padding: "0 2px" }}>
-                  Départ · suggestions près de {DRIVER_PROFILE.baseCity}
-                </div>
-                {filterAddrs(form.pickupAddress).map(a => (
-                  <button key={a.label} className="tp-addr-chip" onClick={() => { update("pickupAddress", a.label); setPickupSuggestOpen(false); }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
-                      <MapPin size={13} style={{ color: "var(--text-dim)", flexShrink: 0 }}/>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)" }}>{a.label}</div>
-                        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{a.detail}</div>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-                <button onClick={() => setPickupSuggestOpen(false)} style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer", padding: 6, textAlign: "left" }}>Masquer les suggestions</button>
-              </div>
-            )}
-            {/* Suggestions (arrivée) */}
-            {dropoffSuggestOpen && (
-              <div className="tp-fade-in" style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", padding: "0 2px" }}>
-                  Arrivée · suggestions
-                </div>
-                {filterAddrs(form.dropoffAddress).map(a => (
-                  <button key={a.label} className="tp-addr-chip" onClick={() => { update("dropoffAddress", a.label); setDropoffSuggestOpen(false); }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
-                      <Navigation size={13} style={{ color: "var(--text-dim)", flexShrink: 0 }}/>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)" }}>{a.label}</div>
-                        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{a.detail}</div>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-                <button onClick={() => setDropoffSuggestOpen(false)} style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer", padding: 6, textAlign: "left" }}>Masquer les suggestions</button>
-              </div>
-            )}
           </div>
         </div>
 
