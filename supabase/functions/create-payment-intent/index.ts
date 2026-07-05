@@ -134,16 +134,14 @@ Deno.serve(async (req: Request) => {
       return json({ error: `Pack inconnu : ${rawPackageId}` }, 400);
     }
 
-    // Profil pour anti-fraude
+    // Note : le flag anti-fraude ("flagged") ne bloque PAS les paiements réels —
+    // il ne sert qu'à empêcher le cumul abusif du bonus de bienvenue gratuit.
+    // Un vrai paiement carte via Stripe/Apple Pay n'a pas ce risque de fraude.
     const { data: profile } = await supabase
       .from("users")
-      .select("email, name, flagged")
+      .select("email, name")
       .eq("id", user.id)
       .single();
-
-    if (profile?.flagged) {
-      return json({ error: "Compte temporairement suspendu" }, 403);
-    }
 
     const stripe = new Stripe(stripeKey, { apiVersion: "2024-06-20" });
 
