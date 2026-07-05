@@ -16,7 +16,12 @@
   --tp-radius: 14px;
   --tp-font-display: 'Fraunces', Georgia, serif;
   --tp-font-body: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  color-scheme: dark;
+  /* Résidu de l'ancien thème sombre (pré-refonte "TrajetPro Clair") : ceci
+     indique au NAVIGATEUR (pas juste à l'app) de peindre en sombre toute
+     zone non explicitement stylée (contrôles natifs, canvas par défaut).
+     Le thème réel est piloté par data-theme dans GlobalStyles (App.jsx) ;
+     ce fichier legacy doit rester cohérent avec le défaut clair actuel. */
+  color-scheme: light;
 }
 
 * {

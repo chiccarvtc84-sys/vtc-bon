@@ -13,7 +13,7 @@ import {
   Coins, Wallet, History, Gift, Crown, Info, TrendingDown,
   Lock, ShieldCheck, Copy, UserPlus, LogIn, Eye, EyeOff,
   Star, Award, Languages, Bell, Palette, Moon, Database,
-  ChevronDown, BookOpen, MessageCircle, HandCoins, Globe,
+  ChevronDown, ChevronUp, BookOpen, MessageCircle, HandCoins, Globe,
   Cloud, Camera, User
 } from 'lucide-react';
 import {
@@ -2287,6 +2287,157 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
 /* -------------------------------------------------------------------------
    BOOKING DETAIL
    ------------------------------------------------------------------------- */
+/* -------------------------------------------------------------------------
+   BOOKING DETAIL SHEET — fiche "Bon de course" réductible par glissement
+   -------------------------------------------------------------------------
+   Habille l'écran BookingDetail (inchangé, réutilisé tel quel) dans une
+   feuille coulissante façon Apple Maps / Uber Driver : un bandeau compact
+   toujours visible (heure, client, trajet, statut) sert à la fois de
+   poignée de glissement ET de résumé quand la fiche est réduite. Glisser
+   vers le haut/bas — ou simplement toucher le bandeau — bascule entre les
+   deux états. Le drag est piloté en impératif (refs, pas de re-render React
+   à chaque frame) pour garantir 60 fps quel que soit le coût du reste de
+   l'arbre — seul l'état final (replié/déplié) déclenche un re-render, pour
+   l'animation de repos (transition CSS). */
+function BookingDetailSheet({ booking, invoiced, onBack, ...rest }) {
+  const [expanded, setExpanded] = useState(true);   // ouvre toujours en plein écran (comportement d'origine)
+  const wrapRef = useRef(null);       // conteneur mesuré (= hauteur de .tp-phone)
+  const sheetRef = useRef(null);      // feuille translatée (transform piloté en direct)
+  const backdropRef = useRef(null);   // voile derrière la feuille (opacité liée à la progression)
+  const [dims, setDims] = useState({ phoneH: 0, handleH: 92 });
+  const drag = useRef({ active: false, startY: 0, startPos: 0, lastY: 0, lastT: 0, velocity: 0, moved: 0 });
+
+  // Mesure la hauteur du conteneur "téléphone" + celle du bandeau, pour
+  // calculer les 2 positions de repos (0 = déplié, phoneH - handleH = replié).
+  useEffect(() => {
+    const phoneEl = wrapRef.current?.closest('.tp-phone');
+    const handleEl = wrapRef.current?.querySelector('[data-sheet-handle]');
+    if (!phoneEl) return;
+    const measure = () => setDims({
+      phoneH: phoneEl.clientHeight,
+      handleH: handleEl?.offsetHeight || 92,
+    });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(phoneEl);
+    if (handleEl) ro.observe(handleEl);
+    return () => ro.disconnect();
+  }, []);
+
+  const EXPANDED_Y = 0;
+  const PEEK_Y = Math.max(0, dims.phoneH - dims.handleH);
+  const DISMISS_SLACK = 90; // marge élastique au-delà du replié avant de fermer complètement
+
+  const applyTransform = (y) => {
+    if (sheetRef.current) sheetRef.current.style.transform = `translateY(${y}px)`;
+    if (backdropRef.current) {
+      const progress = PEEK_Y > 0 ? 1 - Math.min(1, Math.max(0, y / PEEK_Y)) : (y <= 0 ? 1 : 0);
+      backdropRef.current.style.opacity = String(progress * 0.32);
+      backdropRef.current.style.pointerEvents = progress > 0.05 ? 'auto' : 'none';
+    }
+  };
+
+  // Repositionne sur l'état de repos courant à chaque changement (resize,
+  // toggle programmatique) — avec transition CSS puisqu'on n'est plus en drag.
+  useEffect(() => {
+    if (drag.current.active) return;
+    if (sheetRef.current) sheetRef.current.style.transition = 'transform 320ms cubic-bezier(0.32,0.72,0,1)';
+    if (backdropRef.current) backdropRef.current.style.transition = 'opacity 320ms cubic-bezier(0.32,0.72,0,1)';
+    applyTransform(expanded ? EXPANDED_Y : PEEK_Y);
+  }, [expanded, dims.phoneH, dims.handleH]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onPointerDown = (e) => {
+    // setPointerCapture peut lever (WebView/pointerId non "actif" selon le
+    // navigateur) — jamais bloquant pour le geste, juste une amélioration
+    // (garde le pointeur capté même si le doigt sort de la zone du bandeau).
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* best effort */ }
+    drag.current = { active: true, startY: e.clientY, startPos: expanded ? EXPANDED_Y : PEEK_Y, lastY: e.clientY, lastT: Date.now(), velocity: 0, moved: 0 };
+    if (sheetRef.current) sheetRef.current.style.transition = 'none';
+    if (backdropRef.current) backdropRef.current.style.transition = 'none';
+  };
+
+  const onPointerMove = (e) => {
+    const d = drag.current;
+    if (!d.active) return;
+    const delta = e.clientY - d.startY;
+    d.moved = Math.max(d.moved, Math.abs(delta));
+    const now = Date.now();
+    const dt = now - d.lastT;
+    if (dt > 0) d.velocity = (e.clientY - d.lastY) / dt; // px/ms, signe = sens
+    d.lastY = e.clientY; d.lastT = now;
+    const rawY = Math.min(PEEK_Y + DISMISS_SLACK, Math.max(EXPANDED_Y, d.startPos + delta));
+    applyTransform(rawY);
+  };
+
+  const onPointerUp = () => {
+    const d = drag.current;
+    if (!d.active) return;
+    d.active = false;
+    const currentY = sheetRef.current ? parseFloat(sheetRef.current.style.transform.replace(/[^0-9.-]/g, '')) || 0 : 0;
+
+    // Un simple tap (quasi aucun déplacement) bascule l'état — accessible
+    // même sans comprendre le geste de glissement (iPhone comme Android).
+    if (d.moved < 6) { setExpanded(v => !v); return; }
+
+    // Glissé bien au-delà du replié → fermeture complète (comme le chevron retour).
+    if (currentY > PEEK_Y + 40) { onBack(); return; }
+
+    // Sinon on retient la position + la vélocité pour choisir l'état le plus naturel.
+    const mid = PEEK_Y / 2;
+    const goingDown = d.velocity > 0.35;
+    const goingUp = d.velocity < -0.35;
+    if (goingDown) setExpanded(false);
+    else if (goingUp) setExpanded(true);
+    else setExpanded(currentY < mid);
+  };
+
+  const d = new Date(booking.dateTime);
+  const isPending = booking.status === "pending";
+
+  return (
+    <div ref={wrapRef} style={{ position: "absolute", inset: 0, zIndex: 900 }}>
+      <div ref={backdropRef} onClick={() => setExpanded(false)} style={{ position: "absolute", inset: 0, background: "#000", opacity: 0, pointerEvents: "none" }}/>
+      <div ref={sheetRef} style={{ position: "absolute", inset: 0, background: "var(--bg)", borderRadius: "22px 22px 0 0", boxShadow: "0 -12px 40px rgba(0,0,0,0.18)", overflow: "hidden", display: "flex", flexDirection: "column", willChange: "transform" }}>
+        {/* Bandeau compact — poignée de drag ET résumé replié (heure/client/trajet/statut) */}
+        <div
+          data-sheet-handle
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+          style={{ touchAction: "none", cursor: "grab", flexShrink: 0, background: "var(--surface)", borderBottom: expanded ? "1px solid var(--border)" : "none", padding: "8px 18px calc(10px + env(safe-area-inset-bottom))" }}
+        >
+          <div style={{ width: 38, height: 4, borderRadius: 3, background: "var(--border)", margin: "0 auto 10px" }}/>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span className="tp-serif" style={{ fontSize: 17, fontWeight: 600, flexShrink: 0 }}>
+              {d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
+            </span>
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+              {booking.customerName}
+            </span>
+            {invoiced
+              ? <Lock size={13} style={{ color: "var(--warn)", flexShrink: 0 }}/>
+              : <span className={`tp-chip ${isPending ? "tp-chip-warn" : "tp-chip-success"}`} style={{ flexShrink: 0 }}>{isPending ? "En attente" : "Confirmée"}</span>}
+            {expanded ? <ChevronDown size={16} style={{ color: "var(--muted)", flexShrink: 0 }}/> : <ChevronUp size={16} style={{ color: "var(--muted)", flexShrink: 0 }}/>}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "var(--text-dim)" }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--text)", flexShrink: 0 }}/>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{booking.pickupAddress}</span>
+            <ChevronRight size={11} style={{ color: "var(--muted)", flexShrink: 0 }}/>
+            <span style={{ width: 6, height: 6, borderRadius: 2, background: "var(--accent)", flexShrink: 0 }}/>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{booking.dropoffAddress}</span>
+          </div>
+        </div>
+
+        {/* Contenu complet — BookingDetail inchangé, scrolle sous le bandeau */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
+          <BookingDetail booking={booking} invoiced={invoiced} onBack={onBack} {...rest}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplicate, defaultGps, activeTripId, invoiced }) {
   const { nav, start: startNav, pick: pickNav, close: closeNav } = useNavigate(defaultGps);
   if (!booking) return null;
@@ -7252,9 +7403,12 @@ export default function App() {
     );
   }
 
-  let screen;
-  if (detailBooking) {
-    screen = <BookingDetail
+  // Fiche "Bon de course" réductible : rendue à part (overlay par-dessus
+  // `screen`, cf. plus bas) plutôt que dans le switch — pour que l'écran
+  // précédent (Accueil, Courses…) reste monté et visible derrière la feuille
+  // coulissante quand elle est repliée.
+  const bookingSheet = detailBooking && (
+    <BookingDetailSheet
       booking={detailBooking}
       invoiced={invoices.some(i => i.bookingId === detailBooking.id)}
       onBack={() => setDetailBooking(null)}
@@ -7277,8 +7431,11 @@ export default function App() {
       onInvoice={onInvoiceBooking}
       defaultGps={preferences.defaultGps}
       activeTripId={activeTripId}
-    />;
-  } else if (detailInvoice) {
+    />
+  );
+
+  let screen;
+  if (detailInvoice) {
     const relatedBooking = bookings.find(b => b.id === detailInvoice.bookingId);
     screen = <InvoiceDetail
       invoice={detailInvoice}
@@ -7389,6 +7546,7 @@ export default function App() {
             </div>
           )}
           {screen}
+          {bookingSheet}
           {showNav && (
             <BottomNav active={tab} onChange={setTab} onVoice={onOpenVoice}/>
           )}
