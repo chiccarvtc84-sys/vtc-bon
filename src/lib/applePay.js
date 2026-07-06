@@ -117,9 +117,22 @@ export async function payWithApplePay(packageId) {
     return { ok: false, reason: `Création PaymentIntent : ${err?.message || 'erreur inconnue'}` };
   }
 
+  // Le plugin natif ne renvoie PAS le message d'erreur détaillé d'Apple/Stripe
+  // dans la valeur résolue de presentApplePay() — il le pousse uniquement via
+  // l'event 'applePayFailed' (voir ApplePayExecutor.swift côté plugin). Sans
+  // ce listener, on ne voit jamais que le statut générique "applePayFailed"
+  // et on perd la vraie raison (certificat, 3DS/SCA requis, carte refusée…).
+  let nativeFailureReason = null;
+  let failedListener = null;
+
   try {
     await ensureStripeInit();
     const { Stripe } = await import('@capacitor-community/stripe');
+
+    failedListener = await Stripe.addListener('applePayFailed', (error) => {
+      nativeFailureReason = typeof error === 'string' ? error : (error?.error ?? null);
+      console.error('[applePay] event applePayFailed →', nativeFailureReason);
+    });
 
     // 2. Test de disponibilité Apple Pay.
     //    Le plugin v7 THROW si indispo, resolve avec undefined si dispo.
@@ -156,7 +169,7 @@ export async function payWithApplePay(packageId) {
     // 4. Présenter la sheet (Face ID prompt système → l'utilisateur valide)
     console.log('[applePay] presentApplePay()…');
     const result = await Stripe.presentApplePay();
-    console.log('[applePay] presentApplePay result →', result);
+    console.log('[applePay] presentApplePay result →', result, 'nativeFailureReason:', nativeFailureReason);
 
     // ⚠️ Plugin v7 : les valeurs sont 'applePayCompleted' / 'applePayCanceled'
     // / 'applePayFailed' (nouvelle convention en lowerCamelCase préfixée).
@@ -174,9 +187,18 @@ export async function payWithApplePay(packageId) {
     if (raw.includes('cancel')) {
       return { ok: false, cancelled: true, reason: 'Paiement annulé.' };
     }
-    return { ok: false, reason: `Paiement échoué (${result?.paymentResult ?? 'inconnu'})` };
+    return {
+      ok: false,
+      reason: nativeFailureReason
+        ? `Paiement échoué : ${nativeFailureReason}`
+        : `Paiement échoué (${result?.paymentResult ?? 'inconnu'})`,
+    };
   } catch (err) {
     console.error('[applePay] EXCEPTION', err?.message, err);
     return { ok: false, reason: err?.message || 'Erreur Apple Pay (cf. logs Xcode)' };
+  } finally {
+    if (failedListener) {
+      try { await failedListener.remove(); } catch { /* best effort */ }
+    }
   }
 }
