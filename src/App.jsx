@@ -71,6 +71,7 @@ import { shareGeneric, sharePdf, openMailto, openSms, downloadIcs } from './lib/
 import { exportInvoicesCsv, exportBookingsCsv } from './lib/csvExport.js';
 import { useEdgeSwipeBack } from './lib/useEdgeSwipeBack.js';
 import { payWithApplePay } from './lib/applePay.js';
+import { purchasePack, isInAppPurchaseAvailable } from './lib/inAppPurchase.js';
 import { parseVoiceCommand as parseVoiceCommandV2 } from './lib/voiceParser.js';
 import {
   ensureNotificationPermission,
@@ -3479,6 +3480,7 @@ function PurchaseModal({ open, onClose, onConfirm }) {
       vatApplied: !applyReverseCharge,
       vatIntra: showVatField ? vatIntra.toUpperCase() : "",
       paymentMethod:
+        isInAppPurchaseAvailable() ? "App Store" :
         paymentMethod === "applepay" ? "Apple Pay" : "Carte bancaire",
     };
 
@@ -3642,26 +3644,40 @@ function PurchaseModal({ open, onClose, onConfirm }) {
                 )}
               </div>
 
-              <div className="tp-label" style={{ marginBottom: 8 }}>Méthode de paiement</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
-                {[
-                  { v: "card", l: "Carte bancaire", icon: CreditCard },
-                  { v: "applepay", l: "Apple Pay", icon: ShieldCheck },
-                ].map(m => {
-                  const isActive = paymentMethod === m.v;
-                  return (
-                    <button key={m.v} onClick={() => setPaymentMethod(m.v)} className="tp-card" style={{
-                      padding: 14, display: "flex", alignItems: "center", gap: 12, cursor: "pointer", textAlign: "left",
-                      borderColor: isActive ? "var(--accent)" : "var(--border)",
-                      background: isActive ? "var(--accent-soft)" : "var(--surface)",
-                    }}>
-                      <m.icon size={18} style={{ color: isActive ? "var(--accent-ink)" : "var(--text-dim)" }}/>
-                      <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{m.l}</span>
-                      {isActive && <Check size={16} style={{ color: "var(--accent-ink)" }}/>}
-                    </button>
-                  );
-                })}
-              </div>
+              {isInAppPurchaseAvailable() ? (
+                // Sur iOS, l'achat passe par l'App Store (In-App Purchase) —
+                // Apple affiche lui-même sa propre sheet de paiement native,
+                // pas de choix de moyen de paiement à faire côté app.
+                <div className="tp-card" style={{
+                  padding: 14, display: "flex", alignItems: "center", gap: 12, marginBottom: 16,
+                  background: "var(--surface)",
+                }}>
+                  <ShieldCheck size={18} style={{ color: "var(--text-dim)" }}/>
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>Paiement via l'App Store</span>
+                </div>
+              ) : (
+                <>
+                  <div className="tp-label" style={{ marginBottom: 8 }}>Méthode de paiement</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+                    {[
+                      { v: "card", l: "Carte bancaire", icon: CreditCard },
+                    ].map(m => {
+                      const isActive = paymentMethod === m.v;
+                      return (
+                        <button key={m.v} onClick={() => setPaymentMethod(m.v)} className="tp-card" style={{
+                          padding: 14, display: "flex", alignItems: "center", gap: 12, cursor: "pointer", textAlign: "left",
+                          borderColor: isActive ? "var(--accent)" : "var(--border)",
+                          background: isActive ? "var(--accent-soft)" : "var(--surface)",
+                        }}>
+                          <m.icon size={18} style={{ color: isActive ? "var(--accent-ink)" : "var(--text-dim)" }}/>
+                          <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{m.l}</span>
+                          {isActive && <Check size={16} style={{ color: "var(--accent-ink)" }}/>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
 
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={() => setStep("choose")} className="tp-btn tp-btn-ghost" style={{ flex: 1 }} disabled={loading}>Retour</button>
@@ -7384,12 +7400,34 @@ export default function App() {
     const packageId = purchase.packageId || purchase.package_id;
     if (!packageId) throw new Error("Pack inconnu (packageId manquant)");
 
-    // ─── FLOW APPLE PAY NATIF (iOS uniquement) ────────────────────────
-    // Si on est sur iPhone Capacitor ET que l'utilisateur a choisi Apple
-    // Pay comme méthode de paiement, on lance la sheet PassKit native.
-    // Avantage : 1 tap + Face ID, zéro page web Stripe Checkout.
-    // Le webhook stripe-webhook reçoit `payment_intent.succeeded` (avec
-    // metadata.flow = 'native_apple_pay') → crédite + facture.
+    // ─── FLOW IN-APP PURCHASE (iOS uniquement, requis par la règle App Store
+    // 3.1.1 — tout contenu numérique consommé dans l'app doit passer par
+    // StoreKit, pas par Stripe/Apple Pay). Aucun choix de moyen de paiement
+    // côté app sur iOS : Apple affiche sa propre sheet de paiement.
+    // Le webhook revenuecat-webhook reçoit l'événement d'achat confirmé
+    // (RevenueCat a lui-même validé le reçu auprès d'Apple) → crédite + facture.
+    if (isInAppPurchaseAvailable()) {
+      const result = await purchasePack(packageId, currentUser.id);
+      if (result.cancelled) {
+        // Annulation par l'utilisateur sur la sheet → silence + retour modal
+        throw new Error("Compte requis");
+      }
+      if (result.notAvailable) {
+        // Pas de fallback Stripe ici : proposer un autre moyen de paiement
+        // à l'intérieur de l'app iOS violerait la même règle qu'on respecte.
+        throw new Error(result.reason || "Achat via l'App Store indisponible.");
+      }
+      if (!result.ok) {
+        throw new Error(result.reason || "Achat échoué");
+      }
+      // Succès : le webhook va créditer en async (quelques secondes).
+      setTimeout(() => { refreshTokens().catch(() => {}); }, 1500);
+      return purchase;
+    }
+
+    // ─── FLOW APPLE PAY NATIF (dormant — conservé au cas où, plus jamais
+    // sélectionnable depuis l'UI puisque le picker "Apple Pay" a été retiré
+    // au profit d'In-App Purchase ci-dessus sur iOS). ──────────────────
     const wantApplePay = (purchase.paymentMethod === "Apple Pay");
     if (wantApplePay && isNativePlatform()) {
       const result = await payWithApplePay(packageId);
