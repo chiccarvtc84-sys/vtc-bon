@@ -49,18 +49,28 @@ Le rôle de Claude est désormais la **maintenance** : correctifs ponctuels, aju
   3. `security_hardening_rpc_and_rls` — durcissement RPC
   4. `security_revoke_trigger_functions_from_anon` (×2)
   5. `anti_double_welcome_bonus_per_device` — un device = un bonus
-- **3 Edge Functions** ACTIVE :
+- **6 Edge Functions** ACTIVE :
   - `verify-siret` (no JWT) — validation SIRET via API INSEE
-  - `create-checkout-session` (JWT requis) — crée la session Stripe Checkout
-  - `stripe-webhook` (no JWT, signature vérifiée) — crédit tokens + facture conforme CGI
+  - `voice-extract` (JWT requis) — nettoyage IA de la dictée vocale (Gemini)
+  - `create-checkout-session` (JWT requis) — session Stripe Checkout (web/Android)
+  - `create-payment-intent` (JWT requis) — PaymentIntent (flux Apple Pay natif, dormant)
+  - `stripe-webhook` (no JWT, signature vérifiée) — crédit tokens + facture + remboursements
+  - `revenuecat-webhook` (no JWT, bearer partagé) — achats In-App Purchase iOS + remboursements
 - Trigger `trg_sync_token_balance` : `users.token_balance` toujours = SUM(`token_transactions.tokens_delta`)
 
-### Paiements Stripe (compte `acct_1TPbCvGYVtGQnVrZ`, Test mode)
-- 4 produits créés : Pack Découverte (20 crédits, 2 €), Essentiel (40, 3,50 €), Confort (50, 4 €), Pro (80, 5 €)
-- Webhook `we_1TQuUgGYVtGQnVrZ0vtAsKgn` → `checkout.session.completed` + `payment_intent.payment_failed`
-- Carte de test : `4242 4242 4242 4242` / `12/34` / `123`
-- Mode invité conservé : `purchaseTokensDev` sans Stripe pour démo
-- ⚠️ **Reste en Test mode** ; passage Live mode = action humaine (validation Stripe)
+### Paiements — DEUX canaux selon la plateforme
+- **iOS = Apple In-App Purchase via RevenueCat** (obligatoire, règle App Store 3.1.1 :
+  du contenu numérique consommé dans l'app ne peut PAS passer par Stripe). Plugin
+  `@revenuecat/purchases-capacitor@11.3.2` (la branche 13.x exige Capacitor 8, on est en 7).
+  4 produits consommables `com.trajetpro.app.pack20/40/50/80` déclarés dans App Store
+  Connect + RevenueCat. `src/lib/inAppPurchase.js` → webhook `revenuecat-webhook`.
+- **Web / Android = Stripe Checkout** (inchangé).
+- **Stripe est en mode LIVE** (bascule effectuée). ⚠️ Vérifier qu'un webhook existe bien
+  côté Live : les webhooks Test et Live sont deux configurations SÉPARÉES — un paiement
+  réel avait été encaissé sans créditer les jetons pour cette raison.
+- Mode invité conservé : `purchaseTokensDev` sans Stripe pour démo.
+- ⚠️ Les prix réels iOS suivent les **paliers Apple** (ex. 3,59 € au lieu de 3,50 €) :
+  le montant facturé vient toujours du webhook, jamais du catalogue codé en dur.
 
 ### Mobile (Capacitor 7)
 - `npx cap add android` ✅ projet Gradle dans `android/`, buildable depuis Windows
@@ -103,7 +113,7 @@ Tout le code est livré. Les actions ci-dessous **ne peuvent pas être faites pa
 
 - **Frontend** : React 19 + Vite 6 + Capacitor 7
 - **Backend** : Supabase (PostgreSQL + Auth + Edge Functions Deno)
-- **Paiements** : Stripe Checkout hosted (Test mode dev)
+- **Paiements** : Apple In-App Purchase via RevenueCat (iOS) + Stripe Checkout (web/Android), mode LIVE
 - **Région Supabase** : West EU (Paris) — projet `olmhckwethdcxhvsrfie` (`trajetpro-prod`)
 - **Bundle ID** : `com.trajetpro.app`
 - **Plugins Capacitor** : `app`, `network`, `preferences`, `local-notifications`
@@ -124,7 +134,10 @@ Refonte validée : passage d'un thème **sombre** à un thème **clair premium**
 - **Source de vérité des tokens** : bloc `GlobalStyles` dans `src/App.jsx` (`:root` = sombre, `:root[data-theme="light"]` = clair). Le vieux `src/index.css` (`--tp-*`) est secondaire.
 - Composants clés : `.tp-card` (ombre douce en clair via `--shadow-card`), `--shadow-hero`, `--map-bg/--map-road/--map-block` (fond map ambiant `AmbientMap`).
 
-**Refonte écran par écran (en cours) :** ✅ Accueil (map + hero « prochaine course » + `NextCourseHero`/`AmbientMap`). ⏳ à faire : Courses, BookingForm (flow départ→arrivée), Factures, Jetons, Profil, etc. Garder toute la logique Supabase/Stripe intacte.
+**Refonte terminée** sur tous les écrans. Tokens de TEXTE lisibles ajoutés après audit :
+`--accent-ink`, `--success-ink`, `--warn-ink`, `--wa-ink`. Règle : le token « plein »
+(`--success`, `--accent`…) sert aux FONDS et aux icônes, le token `*-ink` au TEXTE —
+sinon le contraste tombe sous le seuil lisible en thème clair.
 
 ## 👤 Identité chauffeur (constante DRIVER_PROFILE)
 
@@ -150,6 +163,59 @@ REFERRAL_BONUS_REFERRER = 10
 REFERRAL_BONUS_REFEREE = 5
 MONTHLY_BONUS_TOKENS = 1
 ```
+
+## 🔒 Décisions issues de l'audit du 2026-07-29 — NE PAS RÉGRESSER
+
+Audit multi-agents complet (8 dimensions + vérification adversariale) : 24 bugs
+corrigés. Les points ci-dessous sont des invariants — les casser réintroduit des
+bugs déjà payés cher.
+
+1. **Deux familles de factures dans la MÊME table `invoices`** :
+   `FAC-` = ventes du chauffeur (liées à un `booking_id`, TVA 10 %) ;
+   `TRP-` = achats de crédits où le chauffeur est CLIENT (compteur GLOBAL, TVA 20 %).
+   → Helper `isSalesInvoice()` : **toujours filtrer** avant d'alimenter l'écran
+   Factures, le chiffre d'affaires ou l'export CSV. Ne jamais coder le taux de TVA
+   en dur : `invoiceFromDb` expose le `vatRate` réel de la ligne.
+
+2. **Toute numérotation de facture se fait côté SQL, sous advisory lock** — jamais
+   en « lire le max puis insérer » depuis le client ou une edge function (deux
+   paiements simultanés obtenaient le même numéro) :
+   - `create_purchase_invoice(...)` → TRP-, appelée par les 2 webhooks
+   - `create_invoice_for_booking(user, booking)` → FAC-, appelée par `createInvoice`,
+     fait TOUT dans une transaction (numéro + solde + facture + débit du crédit).
+     ⚠️ `invoices` n'a **volontairement aucune policy DELETE** (art. 242 nonies A CGI) :
+     un « rollback » côté client y est un no-op silencieux. D'où la RPC atomique.
+
+3. **Remboursements** : `refund_token_purchase()` branchée sur `charge.refunded`
+   (Stripe) et `CANCELLATION`/`REFUND` (RevenueCat). Les index UNIQUE anti-double-crédit
+   sont **restreints à `kind='purchase'`** — sinon ils bloquent la ligne de
+   remboursement qui doit référencer la même transaction.
+
+4. **Session** : stockée dans les Preferences natives (pas localStorage — iOS purge
+   localStorage). `signOut()` appelle `supabase.auth.signOut()` **AVANT** de purger
+   (sinon le refresh token n'est jamais révoqué côté serveur), puis purge **toujours**.
+
+5. **`onAuthStateChange`** : `SIGNED_IN` est ré-émis à chaque retour au premier plan
+   → garde sur `loadedUserIdRef` obligatoire, sinon rechargement complet + retour
+   forcé à l'Accueil à chaque appel téléphonique reçu.
+
+6. **Dates** : `toLocalInput(d)` pour tout `<input type="datetime-local">`.
+   **Jamais** `toISOString().slice(0,16)` (décale de 1-2 h en France).
+
+7. **Actions consommant un crédit** : verrou `busyActionRef` + bouton `disabled` +
+   id stable — le double-tap créait 2 bons et débitait 2 crédits.
+
+8. **Bon de course = document réglementaire** : pour un compte réel, un champ de
+   profil vide affiche « À renseigner », **jamais** la valeur d'exemple de
+   `DRIVER_PROFILE` (sinon on imprime le n° VTC de quelqu'un d'autre).
+
+9. **Le hero de l'Accueil a `isolation: isolate`** — sans ça, les panes Leaflet
+   (z-index jusqu'à 600) passent au-dessus des modales de toute l'app.
+
+⚠️ **La base de production est en AVANCE sur `supabase/SUPABASE_SCHEMA.sql`**
+(colonnes et contraintes décrites dans le fichier mais absentes en base, et
+inversement). **Toujours interroger la base via le MCP Supabase** plutôt que de se
+fier à ce fichier.
 
 ## 🛡️ Règles de sécurité non négociables (déjà appliquées partout)
 
@@ -185,7 +251,7 @@ MONTHLY_BONUS_TOKENS = 1
 ## 🛠️ Outils MCP disponibles
 
 - **Supabase** (`mcp__…__execute_sql`, `apply_migration`, `deploy_edge_function`, `get_advisors`, `list_tables`, `list_migrations`, `list_edge_functions`) — projet `olmhckwethdcxhvsrfie`
-- **Stripe** (`mcp__…__list_products`, `create_product`, `create_price`, `list_payment_intents`, `list_invoices`) — compte `acct_1TPbCvGYVtGQnVrZ`
+- **Stripe** (`mcp__…__list_products`, `create_product`, `list_payment_intents`, …) — si le connecteur est branché
 - **Claude in Chrome** / **Claude Preview** : ouvrir l'app Vite en preview pour tester visuellement
 
 ## 💬 Style
