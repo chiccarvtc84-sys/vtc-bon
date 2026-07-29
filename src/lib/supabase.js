@@ -134,17 +134,53 @@ export async function signIn(email, password) {
 }
 
 /**
+ * Envoie un email de réinitialisation de mot de passe.
+ *
+ * Sans ça, un chauffeur qui oublie son mot de passe perd définitivement son
+ * compte — donc ses crédits achetés et ses factures (qu'il a l'obligation
+ * légale de conserver). C'est aussi un motif classique de rejet App Store.
+ *
+ * Le lien renvoie sur l'app ; Supabase émet alors l'événement
+ * PASSWORD_RECOVERY côté client, qui ouvre l'écran de choix du nouveau mot
+ * de passe.
+ *
+ * @param {string} email
+ */
+export async function resetPassword(email) {
+  const redirectTo = typeof window !== 'undefined' ? window.location.origin : undefined;
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+  // On ne propage PAS une erreur "utilisateur inconnu" : révéler qu'une
+  // adresse est (ou non) inscrite permettrait d'énumérer les comptes.
+  if (error && !/user not found|not found/i.test(error.message || '')) {
+    throw new Error(error.message || "Envoi de l'email impossible");
+  }
+  return true;
+}
+
+/**
+ * Définit un nouveau mot de passe pour l'utilisateur actuellement authentifié
+ * (utilisé après le retour du lien de réinitialisation, événement
+ * PASSWORD_RECOVERY).
+ *
+ * @param {string} newPassword
+ */
+export async function updatePassword(newPassword) {
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) throw new Error(error.message || 'Mise à jour du mot de passe impossible');
+  return true;
+}
+
+/**
  * Déconnexion robuste.
  *
  * Le bug que ce code prévient : `supabase.auth.signOut()` est async, donc si
  * l'utilisateur ferme la page entre l'appel et la fin de la requête réseau,
- * les clés JWT peuvent rester dans `localStorage`. À la réouverture,
+ * les clés JWT peuvent rester dans le stockage. À la réouverture,
  * `getSession()` les retrouve et "restaure" l'ancienne session — l'utilisateur
  * croit être déconnecté mais ne l'est pas.
  *
- * Parade : on **purge synchroniquement** toutes les clés Supabase du
- * localStorage AVANT le `await`. Même si la requête réseau échoue ou est
- * interrompue, le navigateur ne retrouvera plus de session au prochain load.
+ * Parade : le nettoyage local (Preferences natives + localStorage) est
+ * TOUJOURS exécuté, même si l'appel réseau échoue ou dépasse son délai.
  */
 export async function signOut() {
   // ⚠️ ORDRE IMPORTANT (audit 2026-07-29) : la purge du stockage doit venir

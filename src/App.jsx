@@ -22,6 +22,8 @@ import {
   signIn as sbSignIn,
   signUp as sbSignUp,
   signOut as sbSignOut,
+  resetPassword as sbResetPassword,
+  updatePassword as sbUpdatePassword,
   getCurrentUser,
   loadBookings as sbLoadBookings,
   loadInvoices as sbLoadInvoices,
@@ -423,10 +425,15 @@ const GlobalStyles = () => (
       --accent-hover: #60A5FA;
       --success: #4ADE80;
       --success-soft: rgba(74,222,128,0.12);
+      /* Déclinaison LISIBLE en texte (même logique que --accent-ink) :
+         --success sert aux fonds/icônes, --success-ink au texte sur fond doux. */
+      --success-ink: #4ADE80;
       --error: #F87171;
       --error-soft: rgba(248,113,113,0.12);
       --warn: #FBBF24;
       --warn-soft: rgba(251,191,36,0.12);
+      --warn-ink: #FBBF24;
+      --wa-ink: #25D366;              /* vert WhatsApp, lisible sur fond sombre */
       --nav-bg: rgba(11,11,13,0.85);
       --shadow-card: none;
       --shadow-hero: 0 20px 50px -20px rgba(0,0,0,0.7);
@@ -464,10 +471,16 @@ const GlobalStyles = () => (
       --accent-hover: #1D4ED8;
       --success: #12B76A;
       --success-soft: rgba(18,183,106,0.12);
+      /* Le vert de marque #12B76A sur fond vert pâle ne donne que 2,3:1 —
+         illisible pour les puces « Payée »/« Confirmée ». Version foncée
+         réservée au TEXTE (7:1), le vert clair restant pour fonds et icônes. */
+      --success-ink: #067647;
       --error: #E5484D;
       --error-soft: rgba(229,72,77,0.10);
       --warn: #B7791F;                /* ambre foncé lisible sur clair */
       --warn-soft: rgba(224,164,34,0.14);
+      --warn-ink: #8A5A12;
+      --wa-ink: #075E54;              /* vert WhatsApp foncé officiel, lisible sur clair */
       --nav-bg: rgba(255,255,255,0.86);
       --shadow-card: 0 1px 2px rgba(22,23,27,0.04), 0 8px 24px rgba(22,23,27,0.06);
       --shadow-hero: 0 22px 60px -24px rgba(22,23,27,0.28);
@@ -570,8 +583,8 @@ const GlobalStyles = () => (
       background: var(--surface-3); color: var(--text-dim); border: 1px solid var(--border);
     }
     .tp-chip-accent { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent-ring); }
-    .tp-chip-success { background: var(--success-soft); color: var(--success); border-color: rgba(74,222,128,0.3); }
-    .tp-chip-warn { background: var(--warn-soft); color: var(--warn); border-color: rgba(251,191,36,0.3); }
+    .tp-chip-success { background: var(--success-soft); color: var(--success-ink); border-color: var(--success-soft); }
+    .tp-chip-warn { background: var(--warn-soft); color: var(--warn-ink); border-color: var(--warn-soft); }
     .tp-chip-error { background: var(--error-soft); color: var(--error); border-color: rgba(248,113,113,0.3); }
 
     .tp-divider { height: 1px; background: var(--border); margin: 16px 0; }
@@ -857,13 +870,19 @@ function RouteMap({ pickup, dropoff, driver, onReady, onFail, onRoute, onDriverR
       });
       mapRef.current = map;
 
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      // Le fond de carte doit suivre le thème : en sombre, le basemap clair
+      // faisait un rectangle blanc éblouissant au milieu de l'écran (et le
+      // repli décoratif AmbientMap, lui, respecte déjà les tokens de thème).
+      const isDarkTheme = document.documentElement.getAttribute('data-theme') !== 'light';
+      const basemap = isDarkTheme ? 'dark_all' : 'light_all';
+      const markerRing = isDarkTheme ? '#1E2024' : '#fff';
+      L.tileLayer(`https://{s}.basemaps.cartocdn.com/${basemap}/{z}/{x}/{y}{r}.png`, {
         subdomains: 'abcd', maxZoom: 19,
       }).addTo(map);
 
       const mk = (bg, radius) => L.divIcon({
         className: '',
-        html: `<div style="width:16px;height:16px;border-radius:${radius};background:${bg};border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35)"></div>`,
+        html: `<div style="width:16px;height:16px;border-radius:${radius};background:${bg};border:3px solid ${markerRing};box-shadow:0 2px 6px rgba(0,0,0,.35)"></div>`,
         iconSize: [16, 16], iconAnchor: [8, 8],
       });
 
@@ -910,9 +929,10 @@ function RouteMap({ pickup, dropoff, driver, onReady, onFail, onRoute, onDriverR
       return;
     }
 
+    const carRing = document.documentElement.getAttribute('data-theme') === 'light' ? '#fff' : '#1E2024';
     const carIcon = L.divIcon({
       className: '',
-      html: `<div style="width:30px;height:30px;border-radius:50%;background:#2563EB;border:3px solid #fff;box-shadow:0 3px 10px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center">${CAR_MARKER_SVG}</div>`,
+      html: `<div style="width:30px;height:30px;border-radius:50%;background:#2563EB;border:3px solid ${carRing};box-shadow:0 3px 10px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center">${CAR_MARKER_SVG}</div>`,
       iconSize: [30, 30], iconAnchor: [15, 15],
     });
     if (!driverMarkerRef.current) {
@@ -1130,13 +1150,17 @@ function NextCourseHero({ next, onOpen, onNew, activeTripId, onStartTrip, onEndT
   const progress = (enRoute && remainKm != null && tripTotalRef.current) ? Math.min(1, Math.max(0, 1 - remainKm / tripTotalRef.current)) : 0;
 
   return (
-    <div style={{ position: "relative", borderRadius: 22, overflow: "hidden", border: "1px solid var(--border)", boxShadow: "var(--shadow-hero)", background: "var(--surface)" }}>
+    // `isolation: isolate` crée un contexte d'empilement local : sans lui, les
+    // panes internes de Leaflet (z-index jusqu'à 600) et le badge ci-dessous
+    // (700) étaient comparés aux z-index de TOUTE la page — la carte et le
+    // badge passaient donc PAR-DESSUS les modales et feuilles de l'app.
+    <div style={{ position: "relative", isolation: "isolate", borderRadius: 22, overflow: "hidden", border: "1px solid var(--border)", boxShadow: "var(--shadow-hero)", background: "var(--surface)" }}>
       {/* MAP */}
       <div style={{ position: "relative", height: 150 }}>
         {canMap && !mapFailed
           ? <RouteMap pickup={next.pickupAddress} dropoff={next.dropoffAddress} driver={enRoute ? driverPos : null} onFail={() => setMapFailed(true)} onRoute={setRouteInfo} onDriverRoute={setDriverRoute} />
           : <AmbientMap withRoute={!!next} />}
-        <div style={{ position: "absolute", top: 12, left: 14, zIndex: 700, display: "inline-flex", alignItems: "center", gap: 6, background: enRoute ? "var(--accent)" : "var(--nav-bg)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", padding: "5px 11px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: enRoute ? "var(--accent-on)" : "var(--accent-ink)", border: enRoute ? "none" : "1px solid var(--border)" }}>
+        <div style={{ position: "absolute", top: 12, left: 14, zIndex: 2, display: "inline-flex", alignItems: "center", gap: 6, background: enRoute ? "var(--accent)" : "var(--nav-bg)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", padding: "5px 11px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: enRoute ? "var(--accent-on)" : "var(--accent-ink)", border: enRoute ? "none" : "1px solid var(--border)" }}>
           {enRoute ? <Car size={11}/> : <Navigation size={11}/>} {enRoute ? "En route" : (next ? "Prochaine course" : "Rien de prévu")}
         </div>
       </div>
@@ -3051,7 +3075,10 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
     email: currentUser.email || '',
     phone: currentUser.phone || '',
     siret: currentUser.siret || '',
-    vatRate: 10, // taux TVA fixe pour transport personnes
+    // Taux réel de la facture (10 % course / 20 % achat de crédits) plutôt
+    // qu'un 10 % figé, sinon le PDF affichait un taux incohérent avec le
+    // montant de TVA effectivement inscrit.
+    vatRate: invoice.vatRate ?? 10,
     // Tous les autres champs (companyName, vtcNumber, proCardNumber,
     // vehicleModel, vehiclePlate, address) viennent de invoiceSettings
     // car ils ne sont pas stockés dans la table users.
@@ -3262,7 +3289,7 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
               <span>{eur(invoice.amount - invoice.vatAmount)}</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}>
-              <span style={{ color: "var(--text-dim)" }}>TVA ({DRIVER_PROFILE.vatRate}%)</span>
+              <span style={{ color: "var(--text-dim)" }}>TVA ({invoice.vatRate ?? DRIVER_PROFILE.vatRate}%)</span>
               <span>{eur(invoice.vatAmount)}</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 0", borderTop: "1px solid var(--border)", marginTop: 6 }}>
@@ -3326,7 +3353,7 @@ function InvoiceDetail({ invoice, booking, onBack, invoiceSettings = {}, current
           <button onClick={onShareInvoice} className="tp-btn tp-btn-primary"><Send size={15}/> Envoyer (PDF)</button>
           <button onClick={onShareLink} className="tp-btn tp-btn-ghost"><Share2 size={15}/> Partager texte</button>
           <button onClick={onEmail} className="tp-btn tp-btn-ghost"><Mail size={15}/> Email</button>
-          <button onClick={onWhatsApp} className="tp-btn tp-btn-ghost" style={{ color: "#25D366" }}>
+          <button onClick={onWhatsApp} className="tp-btn tp-btn-ghost" style={{ color: "var(--wa-ink)" }}>
             <MessageCircle size={15}/> WhatsApp
           </button>
         </div>
@@ -3889,7 +3916,7 @@ function PurchaseDetailModal({ open, purchase, onClose }) {
             <button className="tp-btn tp-btn-primary"><Mail size={15}/> Envoyer par email</button>
             <button className="tp-btn tp-btn-ghost"><Download size={15}/> Télécharger</button>
             <button className="tp-btn tp-btn-ghost"><Share2 size={15}/> Partager</button>
-            <button className="tp-btn tp-btn-ghost" style={{ color: "#25D366" }}>
+            <button className="tp-btn tp-btn-ghost" style={{ color: "var(--wa-ink)" }}>
               <MessageCircle size={15}/> WhatsApp
             </button>
           </div>
@@ -4048,7 +4075,7 @@ function AvatarPicker({ currentUser }) {
         <div style={{
           width: 72, height: 72, borderRadius: 18,
           background: 'linear-gradient(135deg, var(--accent), #1E40AF)',
-          color: '#0B0B0D',
+          color: 'var(--accent-on)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: 26, fontWeight: 700, fontFamily: "'Fraunces', serif",
           flexShrink: 0,
@@ -4927,12 +4954,113 @@ function WelcomeScreen({ onChangeMode, onGuest }) {
   );
 }
 
+/* -------------------------------------------------------------------------
+   NOUVEAU MOT DE PASSE — écran affiché au retour du lien de réinitialisation
+   ------------------------------------------------------------------------- */
+function NewPasswordScreen({ onDone }) {
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const submit = async () => {
+    setError("");
+    if (pw.length < 8) { setError("8 caractères minimum."); return; }
+    if (pw !== pw2) { setError("Les deux mots de passe ne correspondent pas."); return; }
+    setLoading(true);
+    try {
+      // Même contrôle qu'à l'inscription : refus des mots de passe déjà
+      // présents dans des fuites publiques (HaveIBeenPwned, k-anonymity).
+      if (await isPasswordPwned(pw)) {
+        setError("Ce mot de passe apparaît dans des fuites de données connues. Choisissez-en un autre.");
+        setLoading(false);
+        return;
+      }
+      await sbUpdatePassword(pw);
+      onDone();
+    } catch (err) {
+      setError(err?.message || "Impossible de mettre à jour le mot de passe.");
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="tp-scroll tp-fade-in" style={{ minHeight: "100dvh", padding: "24px" }}>
+      <div style={{ marginBottom: 28 }}>
+        <div className="tp-serif" style={{ fontSize: 30, fontWeight: 600, lineHeight: 1.1 }}>Nouveau mot de passe</div>
+        <div style={{ fontSize: 14, color: "var(--text-dim)", marginTop: 8, lineHeight: 1.5 }}>
+          Choisissez un nouveau mot de passe pour votre compte TrajetPro.
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div>
+          <div className="tp-label" style={{ marginBottom: 6 }}>Nouveau mot de passe</div>
+          <div style={{ position: "relative" }}>
+            <Lock size={16} style={{ position: "absolute", left: 14, top: 14, color: "var(--muted)" }}/>
+            <input className="tp-input" type={showPw ? "text" : "password"} style={{ paddingLeft: 38, paddingRight: 44 }}
+              placeholder="••••••••" value={pw} onChange={e => setPw(e.target.value)}/>
+            <button onClick={() => setShowPw(!showPw)} style={{ position: "absolute", right: 8, top: 8, background: "none", border: "none", cursor: "pointer", padding: 6, color: "var(--muted)" }}>
+              {showPw ? <EyeOff size={16}/> : <Eye size={16}/>}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <div className="tp-label" style={{ marginBottom: 6 }}>Confirmer</div>
+          <div style={{ position: "relative" }}>
+            <Lock size={16} style={{ position: "absolute", left: 14, top: 14, color: "var(--muted)" }}/>
+            <input className="tp-input" type={showPw ? "text" : "password"} style={{ paddingLeft: 38 }}
+              placeholder="••••••••" value={pw2} onChange={e => setPw2(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && submit()}/>
+          </div>
+        </div>
+
+        {error && (
+          <div className="tp-card" style={{ padding: 10, background: "var(--error-soft)", borderColor: "rgba(248,113,113,0.3)", fontSize: 12, color: "var(--error)", display: "flex", alignItems: "flex-start", gap: 8, lineHeight: 1.5 }}>
+            <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }}/>
+            <span>{error}</span>
+          </div>
+        )}
+
+        <button onClick={submit} disabled={loading} className="tp-btn tp-btn-primary" style={{ width: "100%", padding: 14, fontSize: 15 }}>
+          {loading
+            ? <><Loader2 size={16} style={{ animation: "tp-spin 1s linear infinite" }}/> Enregistrement…</>
+            : <><Check size={16}/> Valider</>}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function LoginScreen({ onChangeMode, onLogin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // Réinitialisation du mot de passe : "idle" | "sending" | "sent"
+  const [resetState, setResetState] = useState("idle");
+
+  const requestPasswordReset = async () => {
+    const target = email.trim().toLowerCase();
+    if (!target) {
+      setError("Saisissez d'abord votre email ci-dessus, puis retouchez « Mot de passe oublié ? ».");
+      return;
+    }
+    setError("");
+    setResetState("sending");
+    try {
+      await sbResetPassword(target);
+      // On affiche le même message que l'email existe ou non : ne jamais
+      // révéler si une adresse est inscrite (énumération de comptes).
+      setResetState("sent");
+    } catch (err) {
+      setResetState("idle");
+      setError(err?.message || "Envoi impossible. Vérifiez votre connexion.");
+    }
+  };
 
   const submit = async () => {
     setError("");
@@ -4993,9 +5121,22 @@ function LoginScreen({ onChangeMode, onLogin }) {
           </div>
         </div>
 
-        <button style={{ fontSize: 12, color: "var(--accent-ink)", background: "none", border: "none", cursor: "pointer", textAlign: "right", fontWeight: 600, padding: "4px 2px" }}>
-          Mot de passe oublié ?
-        </button>
+        {resetState === "sent" ? (
+          <div className="tp-card" style={{ padding: 12, background: "var(--success-soft, rgba(18,183,106,0.10))", borderColor: "rgba(18,183,106,0.3)", fontSize: 12, color: "var(--text)", display: "flex", alignItems: "flex-start", gap: 8, lineHeight: 1.5 }}>
+            <Check size={14} style={{ flexShrink: 0, marginTop: 1, color: "var(--success, #12B76A)" }}/>
+            <span>
+              Si un compte existe pour <b>{email.trim().toLowerCase()}</b>, un lien de
+              réinitialisation vient d'être envoyé. Pensez à vérifier vos spams.
+            </span>
+          </div>
+        ) : (
+          <button
+            onClick={requestPasswordReset}
+            disabled={resetState === "sending"}
+            style={{ fontSize: 12, color: "var(--accent-ink)", background: "none", border: "none", cursor: "pointer", textAlign: "right", fontWeight: 600, padding: "4px 2px" }}>
+            {resetState === "sending" ? "Envoi…" : "Mot de passe oublié ?"}
+          </button>
+        )}
 
         {error && (
           <div className="tp-card" style={{ padding: 10, background: "var(--error-soft)", borderColor: "rgba(248,113,113,0.3)", fontSize: 12, color: "var(--error)", display: "flex", alignItems: "flex-start", gap: 8, lineHeight: 1.5 }}>
@@ -6518,11 +6659,21 @@ function invoiceFromDb(row) {
     customerName: row.customer_name,
     amount: row.amount_ttc ? Number(row.amount_ttc) : 0,
     vatAmount: row.amount_vat ? Number(row.amount_vat) : 0,
+    // Taux réel de la ligne : 10 % pour une course (transport de personnes),
+    // 20 % pour un achat de crédits (prestation numérique). Sans ça, le détail
+    // et le PDF affichaient « TVA 10 % » sur un montant calculé à 20 %.
+    vatRate: row.vat_rate != null ? Number(row.vat_rate) : 10,
     date: row.issued_at ? row.issued_at.slice(0, 10) : "",
     status: row.status || "pending",
     fingerprint: row.fingerprint,
   };
 }
+
+// Une facture d'ACHAT de crédits (TRP-…, générée par les webhooks de paiement)
+// n'est PAS une facture de vente du chauffeur : il y est le client, pas
+// l'émetteur. Elle ne doit donc jamais apparaître dans « Factures », ni dans
+// le chiffre d'affaires, ni dans l'export comptable des ventes.
+const isSalesInvoice = (inv) => !!inv && (!!inv.bookingId || String(inv.number || '').startsWith('FAC-'));
 
 function tokenTxFromDb(row) {
   if (!row) return null;
@@ -6695,6 +6846,9 @@ export default function App() {
   // réseau lent, un double-tap déclenchait deux fois la même action (2 bons
   // créés, 2 crédits débités, ou 2 factures pour une même course).
   const busyActionRef = useRef(null);
+  // Retour du lien « Mot de passe oublié » : impose le choix d'un nouveau
+  // mot de passe avant tout accès à l'app.
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
 
   // --- Détection réseau (Wi-Fi / cellulaire / hors-ligne) ---
   // Branche @capacitor/network sur mobile, navigator.onLine en web.
@@ -6715,6 +6869,10 @@ export default function App() {
   const [tab, setTab] = useState("home");
   const [bookings, setBookings] = useState(INITIAL_BOOKINGS);
   const [invoices, setInvoices] = useState(INITIAL_INVOICES);
+  // Factures de VENTE uniquement (voir isSalesInvoice) : c'est ce qui alimente
+  // l'écran Factures, le chiffre d'affaires et l'export comptable. Les factures
+  // d'ACHAT de crédits (TRP-) restent consultables dans l'historique Jetons.
+  const salesInvoices = useMemo(() => invoices.filter(isSalesInvoice), [invoices]);
   const [tokenBalance, setTokenBalance] = useState(INITIAL_TOKEN_BALANCE);
   const [tokenHistory, setTokenHistory] = useState(INITIAL_TOKEN_HISTORY);
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
@@ -7039,6 +7197,13 @@ export default function App() {
     // Écouter les changements (login/logout depuis n'importe où)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
+      if (event === 'PASSWORD_RECOVERY') {
+        // L'utilisateur revient du lien « Mot de passe oublié » reçu par mail.
+        // Supabase l'a authentifié temporairement : on lui fait choisir un
+        // nouveau mot de passe avant de le laisser entrer dans l'app.
+        setPasswordRecovery(true);
+        return;
+      }
       if (event === 'SIGNED_IN' && session?.user) {
         setIsGuest(false);
         // ⚠️ CRITIQUE : on déferre TOUT travail async via setTimeout(..., 0).
@@ -7703,6 +7868,22 @@ export default function App() {
     );
   }
 
+  // Retour du lien de réinitialisation : on bloque l'accès à l'app tant que
+  // le nouveau mot de passe n'est pas choisi (la session ouverte par le lien
+  // n'est destinée qu'à ça).
+  if (passwordRecovery) {
+    return (
+      <>
+        <GlobalStyles/>
+        <div className="tp-root">
+          <div className="tp-phone">
+            <NewPasswordScreen onDone={() => setPasswordRecovery(false)}/>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   // Auth flow d'abord
   if (!isAuthenticated && authScreen) {
     return (
@@ -7801,7 +7982,7 @@ export default function App() {
   } else {
     switch (tab) {
       case "home":
-        screen = <HomeScreen bookings={bookings} invoices={invoices} tokenBalance={tokenBalance}
+        screen = <HomeScreen bookings={bookings} invoices={salesInvoices} tokenBalance={tokenBalance}
           isGuest={isGuest} currentUser={currentUser}
           onQuickVoice={onOpenVoice} onNewBooking={onNewBooking}
           onOpenBooking={setDetailBooking} onGoTab={setTab}
@@ -7819,7 +8000,7 @@ export default function App() {
           onQuickVoice={onOpenVoice} onGoTab={setTab}/>;
         break;
       case "invoices":
-        screen = <InvoicesScreen invoices={invoices} bookings={bookings} tokenBalance={tokenBalance}
+        screen = <InvoicesScreen invoices={salesInvoices} bookings={bookings} tokenBalance={tokenBalance}
           onOpenInvoice={setDetailInvoice} onGoTab={setTab}/>;
         break;
       case "tokens":
@@ -7861,7 +8042,7 @@ export default function App() {
   }
 
   const showNav = !detailBooking && !detailInvoice && !formOpen
-    && !["tokens", "referral", "settings", "terms", "help"].includes(tab);
+    && !["tokens", "referral", "settings", "terms", "help", "billing"].includes(tab);
 
   return (
     <>
