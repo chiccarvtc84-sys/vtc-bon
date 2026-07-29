@@ -85,6 +85,15 @@ Deno.serve(async (req: Request) => {
     } else if (event.type === "payment_intent.payment_failed") {
       const intent = event.data.object as Stripe.PaymentIntent;
       console.warn(`Paiement échoué : ${intent.id}`, intent.last_payment_error);
+    } else if (event.type === "charge.refunded") {
+      // Remboursement (total ou partiel) : sans ce traitement, l'utilisateur
+      // récupérait son argent ET gardait ses jetons, avec une facture qui
+      // restait « payée ». On reprend les jetons et on marque la facture.
+      const charge = event.data.object as Stripe.Charge;
+      const intentId = typeof charge.payment_intent === "string"
+        ? charge.payment_intent
+        : charge.payment_intent?.id;
+      await handleRefund(supabase, intentId);
     } else {
       // Autres événements ignorés silencieusement (charge.succeeded, etc.)
       console.log(`Événement ignoré : ${event.type}`);
@@ -154,69 +163,35 @@ async function handleCheckoutCompleted(
     return;
   }
 
-  // 2. Génération de la facture (numéro chronologique TRP-YYYY-XXXX)
-  const year = new Date().getUTCFullYear();
-  const { data: lastInvoice } = await supabase
-    .from("invoices")
-    .select("invoice_number")
-    .like("invoice_number", `TRP-${year}-%`)
-    .order("invoice_number", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  let nextNum = 1;
-  if (lastInvoice?.invoice_number) {
-    const match = lastInvoice.invoice_number.match(/-(\d+)$/);
-    if (match) nextNum = parseInt(match[1], 10) + 1;
-  }
-  const invoiceNumber = `TRP-${year}-${String(nextNum).padStart(4, "0")}`;
-
-  // TVA 20% standard sur prestation de service numérique (vente de crédits)
-  // (En cas d'auto-liquidation UE B2B, à adapter via vat_intra du customer.)
-  const vatRate = 20;
-  const amountHt = +(amountTtc / (1 + vatRate / 100)).toFixed(2);
-  const amountVat = +(amountTtc - amountHt).toFixed(2);
-
-  // Empreinte fiscale : SHA-256 des données invariantes
-  const fingerprintRaw = [
-    invoiceNumber,
-    userId,
-    packageId,
-    String(amountTtc),
-    intentId,
-    new Date().toISOString(),
-  ].join("|");
-  const fingerprint = await sha256(fingerprintRaw);
-
+  // 2. Facture d'achat — numéro TRP-YYYY-NNNN attribué et consommé dans la
+  //    MÊME transaction SQL (advisory lock côté RPC). Avant, chaque webhook
+  //    lisait le max puis insérait : deux achats simultanés de deux
+  //    utilisateurs différents obtenaient le même numéro (la contrainte
+  //    UNIQUE est par utilisateur, elle ne bloquait pas ce doublon).
+  //    TVA 20 % : prestation de service numérique (vente de crédits).
   const customerEmail = session.customer_details?.email ||
     session.customer_email || null;
   const customerName = session.customer_details?.name || packLabel;
 
-  const { error: invoiceError } = await supabase.from("invoices").insert({
-    user_id: userId,
-    booking_id: null,
-    invoice_number: invoiceNumber,
-    customer_name: customerName,
-    customer_email: customerEmail,
-    amount_ht: amountHt,
-    amount_vat: amountVat,
-    amount_ttc: amountTtc,
-    vat_rate: vatRate,
-    vat_reverse_charge: false,
-    status: "paid",
-    payment_method: "card",
-    fingerprint,
-    fingerprint_algorithm: "sha256",
-    qr_code_data:
-      `INV:${invoiceNumber}|TTC:${amountTtc}|VAT:${vatRate}|FP:${fingerprint.slice(0, 16)}`,
-    paid_at: new Date().toISOString(),
-  });
-  if (invoiceError) {
+  const { data: invoiceNumber, error: invoiceError } = await supabase.rpc(
+    "create_purchase_invoice",
+    {
+      p_user_id: userId,
+      p_customer_name: customerName,
+      p_customer_email: customerEmail,
+      p_amount_ttc: amountTtc,
+      p_vat_rate: 20,
+      p_payment_method: "card",
+      p_external_id: intentId,
+    },
+  );
+  if (invoiceError || !invoiceNumber) {
     // On ne re-throw pas : les tokens sont crédités, l'utilisateur a déjà payé.
     // L'absence de facture sera détectable via une requête de cohérence.
     console.error(
-      `⚠️ Facture non créée pour intent ${intentId} : ${invoiceError.message}`,
+      `⚠️ Facture non créée pour intent ${intentId} : ${invoiceError?.message || "aucun numéro renvoyé"}`,
     );
+    return; // pas de backfill d'un numéro de facture qui n'existe pas
   }
 
   // 3. Backfill du numéro de facture sur la transaction de purchase
@@ -273,59 +248,28 @@ async function handlePaymentIntentSucceeded(
     return;
   }
 
-  // 2. Génération de la facture (numérotation chronologique)
-  const year = new Date().getUTCFullYear();
-  const { data: lastInvoice } = await supabase
-    .from("invoices")
-    .select("invoice_number")
-    .like("invoice_number", `TRP-${year}-%`)
-    .order("invoice_number", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  let nextNum = 1;
-  if (lastInvoice?.invoice_number) {
-    const match = lastInvoice.invoice_number.match(/-(\d+)$/);
-    if (match) nextNum = parseInt(match[1], 10) + 1;
-  }
-  const invoiceNumber = `TRP-${year}-${String(nextNum).padStart(4, "0")}`;
-
-  const vatRate = 20;
-  const amountHt = +(amountTtc / (1 + vatRate / 100)).toFixed(2);
-  const amountVat = +(amountTtc - amountHt).toFixed(2);
-
-  const fingerprintRaw = [
-    invoiceNumber, userId, packageId,
-    String(amountTtc), intent.id, new Date().toISOString(),
-  ].join("|");
-  const fingerprint = await sha256(fingerprintRaw);
-
-  // L'email du PaymentIntent vient de receipt_email (positionné à la création)
+  // 2. Facture d'achat — numérotation atomique côté SQL (cf. commentaire
+  //    détaillé dans handleCheckoutCompleted).
+  //    L'email du PaymentIntent vient de receipt_email (posé à la création).
   const customerEmail = intent.receipt_email || null;
 
-  const { error: invoiceError } = await supabase.from("invoices").insert({
-    user_id: userId,
-    booking_id: null,
-    invoice_number: invoiceNumber,
-    customer_name: packLabel,
-    customer_email: customerEmail,
-    amount_ht: amountHt,
-    amount_vat: amountVat,
-    amount_ttc: amountTtc,
-    vat_rate: vatRate,
-    vat_reverse_charge: false,
-    status: "paid",
-    payment_method: "apple_pay",
-    fingerprint,
-    fingerprint_algorithm: "sha256",
-    qr_code_data:
-      `INV:${invoiceNumber}|TTC:${amountTtc}|VAT:${vatRate}|FP:${fingerprint.slice(0, 16)}`,
-    paid_at: new Date().toISOString(),
-  });
-  if (invoiceError) {
+  const { data: invoiceNumber, error: invoiceError } = await supabase.rpc(
+    "create_purchase_invoice",
+    {
+      p_user_id: userId,
+      p_customer_name: packLabel,
+      p_customer_email: customerEmail,
+      p_amount_ttc: amountTtc,
+      p_vat_rate: 20,
+      p_payment_method: "apple_pay",
+      p_external_id: intent.id,
+    },
+  );
+  if (invoiceError || !invoiceNumber) {
     console.error(
-      `⚠️ Facture non créée pour intent ${intent.id} : ${invoiceError.message}`,
+      `⚠️ Facture non créée pour intent ${intent.id} : ${invoiceError?.message || "aucun numéro renvoyé"}`,
     );
+    return; // pas de backfill d'un numéro de facture qui n'existe pas
   }
 
   // 3. Backfill du numéro de facture sur la transaction
@@ -340,12 +284,29 @@ async function handlePaymentIntentSucceeded(
 }
 
 // ----------------------------------------------------------------------------
-// Utils
+// Remboursement Stripe : reprise des jetons + facture marquée remboursée
 // ----------------------------------------------------------------------------
-async function sha256(input: string): Promise<string> {
-  const buf = new TextEncoder().encode(input);
-  const hash = await crypto.subtle.digest("SHA-256", buf);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+async function handleRefund(
+  supabase: ReturnType<typeof createClient>,
+  intentId: string | undefined,
+) {
+  if (!intentId) {
+    console.warn("charge.refunded sans payment_intent — ignoré");
+    return;
+  }
+  const { data, error } = await supabase.rpc("refund_token_purchase", {
+    p_external_id: intentId,
+  });
+  if (error) {
+    throw new Error(`RPC refund_token_purchase échouée : ${error.message}`);
+  }
+  console.log(
+    data === true
+      ? `↩️ Remboursement traité pour l'intent ${intentId}`
+      : `Remboursement ignoré (achat inconnu ou déjà remboursé) : ${intentId}`,
+  );
 }
+
+// Note : l'empreinte fiscale SHA-256 est désormais calculée côté SQL, dans la
+// RPC create_purchase_invoice — elle dépend du numéro de facture, qui n'est
+// attribué qu'à l'intérieur de la transaction verrouillée.

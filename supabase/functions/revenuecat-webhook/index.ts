@@ -83,10 +83,13 @@ Deno.serve(async (req: Request) => {
   try {
     if (PURCHASE_EVENT_TYPES.has(event.type)) {
       await handlePurchaseEvent(supabase, event);
+    } else if (event.type === "CANCELLATION" || event.type === "REFUND") {
+      // Remboursement accordé par Apple (souvent automatique via
+      // reportaproblem.apple.com, sans consultation de l'éditeur) : on
+      // reprend les jetons et on marque la facture remboursée, sinon
+      // l'utilisateur gardait ses crédits ET son argent.
+      await handleRefundEvent(supabase, event);
     } else {
-      // Autres événements ignorés silencieusement (RENEWAL, CANCELLATION,
-      // EXPIRATION, BILLING_ISSUE, TRANSFER, TEST, ... ne concernent pas
-      // les jetons consommables).
       console.log(`Événement RevenueCat ignoré : ${event.type}`);
     }
     return new Response(JSON.stringify({ received: true }), {
@@ -153,62 +156,30 @@ async function handlePurchaseEvent(
     return;
   }
 
-  // 2. Génération de la facture (numérotation chronologique TRP-YYYY-XXXX,
-  //    partagée avec le flux Stripe pour ne jamais avoir de rupture de suite)
-  const year = new Date().getUTCFullYear();
-  const { data: lastInvoice } = await supabase
-    .from("invoices")
-    .select("invoice_number")
-    .like("invoice_number", `TRP-${year}-%`)
-    .order("invoice_number", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  let nextNum = 1;
-  if (lastInvoice?.invoice_number) {
-    const match = lastInvoice.invoice_number.match(/-(\d+)$/);
-    if (match) nextNum = parseInt(match[1], 10) + 1;
-  }
-  const invoiceNumber = `TRP-${year}-${String(nextNum).padStart(4, "0")}`;
-
-  // TVA 20% standard sur prestation de service numérique. Apple gère sa
-  // propre TVA/taxe locale sur le prix affiché à l'acheteur ; on documente
-  // ici la ventilation HT/TVA pour la facture française, cohérente avec le
-  // reste du système (le montant TTC, lui, vient de RevenueCat/Apple).
-  const vatRate = 20;
-  const amountHt = +(amountTtc / (1 + vatRate / 100)).toFixed(2);
-  const amountVat = +(amountTtc - amountHt).toFixed(2);
-
-  const fingerprintRaw = [
-    invoiceNumber, userId, productId,
-    String(amountTtc), transactionId, new Date().toISOString(),
-  ].join("|");
-  const fingerprint = await sha256(fingerprintRaw);
-
-  const { error: invoiceError } = await supabase.from("invoices").insert({
-    user_id: userId,
-    booking_id: null,
-    invoice_number: invoiceNumber,
-    customer_name: pack.label,
-    customer_email: null,
-    amount_ht: amountHt,
-    amount_vat: amountVat,
-    amount_ttc: amountTtc,
-    vat_rate: vatRate,
-    vat_reverse_charge: false,
-    status: "paid",
-    payment_method: "apple_iap",
-    fingerprint,
-    fingerprint_algorithm: "sha256",
-    qr_code_data:
-      `INV:${invoiceNumber}|TTC:${amountTtc}|VAT:${vatRate}|FP:${fingerprint.slice(0, 16)}`,
-    paid_at: new Date().toISOString(),
-  });
-  if (invoiceError) {
+  // 2. Facture d'achat — numéro TRP-YYYY-NNNN attribué et consommé dans la
+  //    MÊME transaction SQL (advisory lock côté RPC). Avant, chaque webhook
+  //    lisait le max puis insérait : deux achats simultanés de deux
+  //    utilisateurs différents obtenaient le même numéro (la contrainte
+  //    UNIQUE est par utilisateur, elle ne bloquait pas ce doublon).
+  //    TVA 20 % : prestation de service numérique.
+  const { data: invoiceNumber, error: invoiceError } = await supabase.rpc(
+    "create_purchase_invoice",
+    {
+      p_user_id: userId,
+      p_customer_name: pack.label,
+      p_customer_email: null,
+      p_amount_ttc: amountTtc,
+      p_vat_rate: 20,
+      p_payment_method: "apple_iap",
+      p_external_id: transactionId,
+    },
+  );
+  if (invoiceError || !invoiceNumber) {
     // On ne re-throw pas : les tokens sont crédités, l'utilisateur a déjà payé.
     console.error(
-      `⚠️ Facture non créée pour transaction ${transactionId} : ${invoiceError.message}`,
+      `⚠️ Facture non créée pour transaction ${transactionId} : ${invoiceError?.message || "aucun numéro renvoyé"}`,
     );
+    return; // pas de backfill d'un numéro qui n'existe pas
   }
 
   // 3. Backfill du numéro de facture sur la transaction
@@ -219,6 +190,32 @@ async function handlePurchaseEvent(
 
   console.log(
     `✅ [Apple IAP] Crédit ${pack.tokens} tokens pour user ${userId} (facture ${invoiceNumber}, transaction ${transactionId})`,
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Remboursement Apple : reprise des jetons + facture marquée remboursée
+// ----------------------------------------------------------------------------
+async function handleRefundEvent(
+  supabase: ReturnType<typeof createClient>,
+  event: RevenueCatEvent,
+) {
+  const transactionId = event.transaction_id;
+  if (!transactionId) {
+    console.warn("Événement de remboursement sans transaction_id — ignoré");
+    return;
+  }
+
+  const { data, error } = await supabase.rpc("refund_token_purchase", {
+    p_external_id: transactionId,
+  });
+  if (error) {
+    throw new Error(`RPC refund_token_purchase échouée : ${error.message}`);
+  }
+  console.log(
+    data === true
+      ? `↩️ Remboursement traité pour la transaction ${transactionId}`
+      : `Remboursement ignoré (achat inconnu ou déjà remboursé) : ${transactionId}`,
   );
 }
 
@@ -236,13 +233,6 @@ interface RevenueCatEvent {
   environment?: string;
 }
 
-// ----------------------------------------------------------------------------
-// Utils
-// ----------------------------------------------------------------------------
-async function sha256(input: string): Promise<string> {
-  const buf = new TextEncoder().encode(input);
-  const hash = await crypto.subtle.digest("SHA-256", buf);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
+// Note : l'empreinte fiscale SHA-256 est désormais calculée côté SQL, dans la
+// RPC create_purchase_invoice — elle dépend du numéro de facture, qui n'est
+// attribué qu'à l'intérieur de la transaction verrouillée.
