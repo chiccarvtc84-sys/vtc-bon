@@ -2641,9 +2641,22 @@ function BookingDetailSheet({ booking, invoiced, onBack, ...rest }) {
   );
 }
 
-function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplicate, defaultGps, activeTripId, invoiced }) {
+function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplicate, defaultGps, activeTripId, invoiced, currentUser }) {
   const { nav, start: startNav, pick: pickNav, close: closeNav } = useNavigate(defaultGps);
   if (!booking) return null;
+
+  // Bandeau "Bon de transport réglementaire" : priorité aux vraies infos du
+  // compte connecté (éditées via Profil → Modifier mes informations), pas
+  // aux valeurs d'exemple de DRIVER_PROFILE (utilisées seulement en mode invité
+  // ou tant qu'un champ n'a pas encore été renseigné).
+  const driverInfo = {
+    companyName: currentUser?.companyName || DRIVER_PROFILE.companyName,
+    siret: currentUser?.siret || DRIVER_PROFILE.siret,
+    vtcNumber: currentUser?.evtcNumber || DRIVER_PROFILE.vtcNumber,
+    proCardNumber: currentUser?.proCardNumber || DRIVER_PROFILE.proCardNumber,
+    vehicleModel: currentUser?.vehicleModel || DRIVER_PROFILE.vehicleModel,
+    vehiclePlate: currentUser?.vehiclePlate || DRIVER_PROFILE.vehiclePlate,
+  };
 
   // Destination GPS : dépose si la course est en cours, sinon prise en charge.
   const enRoute = !!activeTripId && activeTripId === booking.id;
@@ -2738,11 +2751,11 @@ function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplica
           </div>
 
           <div style={{ marginTop: 16, padding: 12, background: "var(--surface-2)", borderRadius: 10, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.6 }}>
-            <div style={{ color: "var(--text)", fontWeight: 700, marginBottom: 4 }}>{DRIVER_PROFILE.companyName}</div>
-            <div>SIRET : {DRIVER_PROFILE.siret}</div>
-            <div>Inscription VTC : {DRIVER_PROFILE.vtcNumber}</div>
-            <div>Carte pro. conducteur : {DRIVER_PROFILE.proCardNumber}</div>
-            <div>Véhicule : {DRIVER_PROFILE.vehicleModel} · {DRIVER_PROFILE.vehiclePlate}</div>
+            <div style={{ color: "var(--text)", fontWeight: 700, marginBottom: 4 }}>{driverInfo.companyName}</div>
+            <div>SIRET : {driverInfo.siret}</div>
+            <div>Inscription VTC : {driverInfo.vtcNumber}</div>
+            <div>Carte pro. conducteur : {driverInfo.proCardNumber}</div>
+            <div>Véhicule : {driverInfo.vehicleModel} · {driverInfo.vehiclePlate}</div>
           </div>
         </div>
 
@@ -7669,6 +7682,7 @@ export default function App() {
       onInvoice={onInvoiceBooking}
       defaultGps={preferences.defaultGps}
       activeTripId={activeTripId}
+      currentUser={currentUser}
     />
   );
 
