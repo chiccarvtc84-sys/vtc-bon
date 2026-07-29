@@ -6907,6 +6907,9 @@ export default function App() {
   // Retour du lien « Mot de passe oublié » : impose le choix d'un nouveau
   // mot de passe avant tout accès à l'app.
   const [passwordRecovery, setPasswordRecovery] = useState(false);
+  // Verrou biométrique actif : l'app reste masquée tant que Face ID / Touch ID
+  // (ou le code de l'appareil) n'a pas validé l'accès.
+  const [biometricLocked, setBiometricLocked] = useState(false);
 
   // --- Détection réseau (Wi-Fi / cellulaire / hors-ligne) ---
   // Branche @capacitor/network sur mobile, navigator.onLine en web.
@@ -7245,6 +7248,20 @@ export default function App() {
       }
       if (mounted && session?.user) {
         setIsGuest(false);
+        // Verrou biométrique : la fonctionnalité était proposée dans les
+        // Réglages (avec un prompt Face ID à l'activation, qui laissait
+        // croire que l'app était protégée) mais n'était JAMAIS vérifiée au
+        // démarrage — un téléphone emprunté déverrouillé donnait accès à
+        // tout. verifyBiometric() est un no-op sur web et si l'option est
+        // désactivée, donc l'appel est sûr dans tous les cas.
+        const bio = await verifyBiometric();
+        if (!bio.ok) {
+          if (mounted) {
+            setBiometricLocked(true);
+            setAuthChecked(true);
+          }
+          return;
+        }
         // ⚠️ loadUserData enchaîne une dizaine de requêtes Supabase sans
         // timeout propre. Sur un réseau « zombie » (portail captif, tunnel,
         // antenne saturée : la couche réseau se dit connectée mais les
@@ -7941,6 +7958,50 @@ export default function App() {
               onRetry={() => window.location.reload()}
               onFinish={() => setSplashActive(false)}
             />
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // Verrou biométrique : rien de l'app n'est révélé tant que l'identité n'est
+  // pas confirmée. « Se déconnecter » reste accessible pour ne jamais
+  // enfermer quelqu'un dont la biométrie ne fonctionne plus.
+  if (biometricLocked) {
+    return (
+      <>
+        <GlobalStyles/>
+        <div className="tp-root">
+          <div className="tp-phone">
+            <div className="tp-scroll tp-fade-in" style={{ minHeight: "100dvh", padding: 24, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 18, textAlign: "center" }}>
+              <div style={{ width: 76, height: 76, borderRadius: "50%", background: "var(--accent-soft)", display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid var(--accent-ring)" }}>
+                <Lock size={32} style={{ color: "var(--accent-ink)" }}/>
+              </div>
+              <div>
+                <div className="tp-serif" style={{ fontSize: 24, fontWeight: 600 }}>TrajetPro est verrouillé</div>
+                <div style={{ fontSize: 14, color: "var(--text-dim)", marginTop: 8, lineHeight: 1.5, maxWidth: 300 }}>
+                  Authentifiez-vous pour accéder à vos courses et à vos factures.
+                </div>
+              </div>
+              <button
+                onClick={async () => {
+                  const bio = await verifyBiometric();
+                  if (bio.ok) setBiometricLocked(false);
+                }}
+                className="tp-btn tp-btn-primary" style={{ width: "100%", maxWidth: 320, padding: 14, fontSize: 15 }}>
+                <Shield size={16}/> Déverrouiller
+              </button>
+              <button
+                onClick={async () => {
+                  await sbSignOut().catch(() => {});
+                  setBiometricLocked(false);
+                  setCurrentUser(null);
+                  setAuthScreen("welcome");
+                }}
+                className="tp-btn tp-btn-ghost" style={{ maxWidth: 320 }}>
+                Se déconnecter
+              </button>
+            </div>
           </div>
         </div>
       </>
