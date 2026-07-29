@@ -21,6 +21,14 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 // déconnecté aléatoirement. On stocke donc la session dans les Préférences
 // natives (UserDefaults iOS / SharedPreferences Android), qui ne sont jamais
 // purgées. Sur web, preferences* retombe sur localStorage : inchangé.
+// Clé sous laquelle supabase-js range la session (convention par défaut :
+// sb-<ref-projet>-auth-token). On la dérive de l'URL plutôt que de la coder
+// en dur, pour rester juste si le projet change.
+const SUPABASE_PROJECT_REF = (() => {
+  try { return new URL(supabaseUrl).hostname.split('.')[0]; } catch { return ''; }
+})();
+export const AUTH_STORAGE_KEY = `sb-${SUPABASE_PROJECT_REF}-auth-token`;
+
 const authStorage = {
   getItem: async (key) => {
     const value = await preferencesGet(key);
@@ -139,10 +147,36 @@ export async function signIn(email, password) {
  * interrompue, le navigateur ne retrouvera plus de session au prochain load.
  */
 export async function signOut() {
-  // 1) Purge synchrone du localStorage (clés `sb-*` et `supabase*`).
-  //    Garantit qu'au prochain reload, getSession() retournera null
-  //    même si l'étape 2 ci-dessous est interrompue (fermeture de tab,
-  //    coupure réseau, etc.).
+  // ⚠️ ORDRE IMPORTANT (audit 2026-07-29) : la purge du stockage doit venir
+  // APRÈS l'appel signOut(). Avant, on purgeait d'abord — auth-js ne
+  // retrouvait alors plus l'access token, n'envoyait donc jamais le POST
+  // /logout, et le refresh token restait valide côté serveur (une session
+  // copiée depuis un poste partagé restait exploitable).
+  //
+  // Timeout court : sur réseau mort, l'appel peut pendre longtemps ; on ne
+  // doit jamais bloquer une déconnexion (le nettoyage local suffit à
+  // déconnecter l'utilisateur ici et maintenant).
+  try {
+    await Promise.race([
+      supabase.auth.signOut({ scope: 'local' }),
+      new Promise((resolve) => setTimeout(resolve, 4000)),
+    ]);
+  } catch (e) {
+    console.warn('signOut() serveur a échoué (nettoyage local effectué quand même) :', e?.message);
+  }
+
+  // Nettoyage local, TOUJOURS exécuté même si l'appel réseau a échoué.
+  // Sur iOS/Android la session vit dans les Preferences natives (adaptateur
+  // authStorage), PAS dans localStorage : sans cette purge, un logout
+  // hors-ligne laissait une session zombie qui reconnectait automatiquement
+  // l'utilisateur au lancement suivant.
+  try {
+    await preferencesRemove(AUTH_STORAGE_KEY);
+  } catch (e) {
+    console.warn('Purge Preferences échouée :', e?.message);
+  }
+
+  // Filet de sécurité web : purge toute clé sb-*/supabase* résiduelle.
   if (typeof localStorage !== 'undefined') {
     const keysToRemove = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -152,17 +186,6 @@ export async function signOut() {
       }
     }
     keysToRemove.forEach((k) => localStorage.removeItem(k));
-  }
-
-  // 2) Invalide la session côté serveur et propage l'event SIGNED_OUT
-  //    aux autres tabs/listeners. Scope 'local' = on ne touche pas aux
-  //    autres devices du même utilisateur (utile s'il est connecté sur
-  //    son téléphone aussi). Best-effort : si ça échoue, l'étape 1 a
-  //    déjà nettoyé localement.
-  try {
-    await supabase.auth.signOut({ scope: 'local' });
-  } catch (e) {
-    console.warn('signOut() serveur a échoué (déjà déconnecté localement) :', e?.message);
   }
 }
 
@@ -422,8 +445,14 @@ export async function deleteMyAccount() {
     throw new Error(`Suppression du compte échouée : ${error.message}`);
   }
 
-  // Purge le localStorage côté client (la session est déjà invalidée
-  // côté serveur par la suppression de auth.users)
+  // Purge le stockage côté client (la session est déjà invalidée côté serveur
+  // par la suppression de auth.users). Sur iOS/Android la session est dans les
+  // Preferences natives, pas dans localStorage — les deux sont nettoyés.
+  try {
+    await preferencesRemove(AUTH_STORAGE_KEY);
+  } catch (e) {
+    console.warn('Purge Preferences échouée :', e?.message);
+  }
   if (typeof localStorage !== 'undefined') {
     const keysToRemove = [];
     for (let i = 0; i < localStorage.length; i++) {

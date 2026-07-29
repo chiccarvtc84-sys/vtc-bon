@@ -13,10 +13,26 @@
 // Le jour où l'on prend une clé Google Places / Mapbox, seul ce fichier change.
 // ============================================================================
 
-import { preferencesGet, preferencesSet } from './platform.js';
+import { preferencesGet, preferencesSet, preferencesRemove } from './platform.js';
 
 // Repli quand le GPS n'est pas disponible : base du chauffeur (Sorgues, 84).
 export const FALLBACK_CENTER = { lat: 44.0066, lng: 4.8725 };
+
+// Overpass et Nominatim sont des services publics gratuits, sans SLA et
+// souvent surchargés. Le signal passé par l'appelant n'annule qu'à la frappe
+// SUIVANTE : si l'utilisateur tape puis attend, un serveur qui ne répond
+// jamais laissait le spinner « Recherche… » tourner indéfiniment. On combine
+// donc son signal avec un délai maximum.
+const SEARCH_TIMEOUT_MS = 8000;
+function withTimeout(signal) {
+  const c = new AbortController();
+  const timer = setTimeout(() => c.abort(), SEARCH_TIMEOUT_MS);
+  if (signal) {
+    if (signal.aborted) c.abort();
+    else signal.addEventListener('abort', () => { clearTimeout(timer); c.abort(); }, { once: true });
+  }
+  return c.signal;
+}
 
 // Distance à vol d'oiseau (km) entre deux points {lat,lng}.
 export function distanceKm(a, b) {
@@ -127,7 +143,7 @@ async function searchByCategory(cfg, center, signal) {
     .join('');
   const ql = `[out:json][timeout:12];(${clauses});out center 60;`;
   const res = await fetch('https://overpass-api.de/api/interpreter', {
-    method: 'POST', signal,
+    method: 'POST', signal: withTimeout(signal),
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'data=' + encodeURIComponent(ql),
   });
@@ -168,7 +184,7 @@ async function nominatimSearch(q, center, signal) {
   const url = 'https://nominatim.openstreetmap.org/search'
     + '?format=jsonv2&addressdetails=1&limit=20&countrycodes=fr&dedupe=1'
     + `&viewbox=${encodeURIComponent(viewbox)}&bounded=0&q=${encodeURIComponent(q)}`;
-  const res = await fetch(url, { signal, headers: { Accept: 'application/json' } });
+  const res = await fetch(url, { signal: withTimeout(signal), headers: { Accept: 'application/json' } });
   if (!res.ok) throw new Error('places http ' + res.status);
   const data = await res.json();
   if (!Array.isArray(data)) return [];
@@ -229,6 +245,20 @@ export async function searchPlaces(query, near, signal) {
 // ─── Historique : récentes + favorites (persisté via Preferences) ───────────
 const RECENT_KEY = 'places_recent';
 const FAV_KEY = 'places_favorites';
+
+/**
+ * Efface l'historique d'adresses du device.
+ * ⚠️ À appeler à CHAQUE déconnexion : ces listes contiennent les adresses des
+ * clients (souvent leur domicile). Sans purge, le chauffeur suivant qui se
+ * connecte sur le même téléphone voyait les adresses clients du précédent
+ * proposées en suggestion — fuite de données personnelles entre comptes.
+ */
+export async function clearPlacesHistory() {
+  try {
+    await preferencesRemove(RECENT_KEY);
+    await preferencesRemove(FAV_KEY);
+  } catch { /* best effort */ }
+}
 
 async function loadList(key) {
   try { const raw = await preferencesGet(key); return raw ? JSON.parse(raw) : []; } catch { return []; }

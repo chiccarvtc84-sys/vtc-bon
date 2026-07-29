@@ -17,6 +17,22 @@ const memCache = new Map();      // { requête normalisée -> {lat,lng}|null }
 
 const norm = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
+// Nominatim et OSRM sont des démos publiques gratuites, sans SLA et
+// régulièrement surchargées. Sans délai maximum, un serveur qui accepte la
+// connexion mais ne répond jamais laissait la promesse en suspens plusieurs
+// minutes : spinner « Recherche… » infini dans le formulaire, et carte du
+// trajet jamais affichée (le repli décoratif n'était jamais déclenché).
+const FETCH_TIMEOUT_MS = 8000;
+function timeoutSignal() {
+  // AbortSignal.timeout n'existe pas partout (vieux WKWebView) → repli manuel.
+  if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
+    return AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  }
+  const c = new AbortController();
+  setTimeout(() => c.abort(), FETCH_TIMEOUT_MS);
+  return c.signal;
+}
+
 export async function geocode(query) {
   const q = (query || '').trim();
   if (!q) return null;
@@ -39,7 +55,7 @@ export async function geocode(query) {
     const url = 'https://nominatim.openstreetmap.org/search'
       + '?format=json&limit=1&addressdetails=0&countrycodes=fr&q='
       + encodeURIComponent(q);
-    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: timeoutSignal() });
     if (!res.ok) throw new Error('geocode http ' + res.status);
     const data = await res.json();
     if (!Array.isArray(data) || data.length === 0) {
@@ -70,7 +86,7 @@ export async function routeBetween(a, b) {
   try {
     const url = 'https://router.project-osrm.org/route/v1/driving/'
       + `${a.lng},${a.lat};${b.lng},${b.lat}?overview=full&geometries=geojson`;
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: timeoutSignal() });
     if (!res.ok) throw new Error('osrm http ' + res.status);
     const data = await res.json();
     if (data.code !== 'Ok' || !Array.isArray(data.routes) || !data.routes.length) return null;

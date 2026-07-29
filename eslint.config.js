@@ -38,7 +38,7 @@ export default [
         alert: 'readonly', confirm: 'readonly', prompt: 'readonly',
         crypto: 'readonly', atob: 'readonly', btoa: 'readonly',
         TextEncoder: 'readonly', TextDecoder: 'readonly',
-        AbortController: 'readonly', CustomEvent: 'readonly',
+        AbortController: 'readonly', AbortSignal: 'readonly', CustomEvent: 'readonly',
         Notification: 'readonly', screen: 'readonly',
         ResizeObserver: 'readonly', IntersectionObserver: 'readonly',
         MutationObserver: 'readonly', PointerEvent: 'readonly',

@@ -56,7 +56,7 @@ import { checkPasswordStrength, isPasswordPwned } from './lib/passwordSecurity.j
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { geocode, routeBetween } from './lib/geocode.js';
-import { searchPlaces, fmtDistance, distanceKm as placeDistanceKm, etaMinutes as placeEtaMinutes, loadRecents, loadFavorites, addRecent, toggleFavorite, isFavorite } from './lib/places.js';
+import { searchPlaces, fmtDistance, distanceKm as placeDistanceKm, etaMinutes as placeEtaMinutes, loadRecents, loadFavorites, addRecent, toggleFavorite, isFavorite, clearPlacesHistory } from './lib/places.js';
 import {
   isBiometricAvailable,
   isBiometricEnabled,
@@ -7067,6 +7067,9 @@ export default function App() {
         setTokenHistory([]);
         setAuthScreen("welcome");
         setTab("home");
+        // L'historique d'adresses contient les domiciles des clients : il ne
+        // doit pas suivre sur le compte suivant connecté depuis ce téléphone.
+        clearPlacesHistory().catch(() => {});
       }
     });
 
