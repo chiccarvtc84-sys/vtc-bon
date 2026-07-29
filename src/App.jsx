@@ -2718,18 +2718,25 @@ function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplica
   const { nav, start: startNav, pick: pickNav, close: closeNav } = useNavigate(defaultGps);
   if (!booking) return null;
 
-  // Bandeau "Bon de transport réglementaire" : priorité aux vraies infos du
-  // compte connecté (éditées via Profil → Modifier mes informations), pas
-  // aux valeurs d'exemple de DRIVER_PROFILE (utilisées seulement en mode invité
-  // ou tant qu'un champ n'a pas encore été renseigné).
+  // Bandeau "Bon de transport réglementaire" : les vraies infos du compte
+  // connecté (éditées via Profil → Modifier mes informations).
+  //
+  // ⚠️ Pour un compte RÉEL, un champ vide affiche « À renseigner » et JAMAIS
+  // la valeur d'exemple de DRIVER_PROFILE : c'est un document réglementaire
+  // (décret 2017-483), y faire figurer un n° VTC ou une carte pro d'exemple
+  // reviendrait à présenter au client l'identité professionnelle de
+  // quelqu'un d'autre. Les valeurs de démo ne servent qu'au mode invité.
+  const MANQUANT = "À renseigner";
+  const fld = (v, demo) => (currentUser ? (v || MANQUANT) : demo);
   const driverInfo = {
-    companyName: currentUser?.companyName || DRIVER_PROFILE.companyName,
-    siret: currentUser?.siret || DRIVER_PROFILE.siret,
-    vtcNumber: currentUser?.evtcNumber || DRIVER_PROFILE.vtcNumber,
-    proCardNumber: currentUser?.proCardNumber || DRIVER_PROFILE.proCardNumber,
-    vehicleModel: currentUser?.vehicleModel || DRIVER_PROFILE.vehicleModel,
-    vehiclePlate: currentUser?.vehiclePlate || DRIVER_PROFILE.vehiclePlate,
+    companyName: fld(currentUser?.companyName, DRIVER_PROFILE.companyName),
+    siret: fld(currentUser?.siret, DRIVER_PROFILE.siret),
+    vtcNumber: fld(currentUser?.evtcNumber, DRIVER_PROFILE.vtcNumber),
+    proCardNumber: fld(currentUser?.proCardNumber, DRIVER_PROFILE.proCardNumber),
+    vehicleModel: fld(currentUser?.vehicleModel, DRIVER_PROFILE.vehicleModel),
+    vehiclePlate: fld(currentUser?.vehiclePlate, DRIVER_PROFILE.vehiclePlate),
   };
+  const infosIncompletes = !!currentUser && Object.values(driverInfo).some((v) => v === MANQUANT);
 
   // Destination GPS : dépose si la course est en cours, sinon prise en charge.
   const enRoute = !!activeTripId && activeTripId === booking.id;
@@ -2830,6 +2837,17 @@ function BookingDetail({ booking, onBack, onEdit, onDelete, onInvoice, onDuplica
             <div>Carte pro. conducteur : {driverInfo.proCardNumber}</div>
             <div>Véhicule : {driverInfo.vehicleModel} · {driverInfo.vehiclePlate}</div>
           </div>
+
+          {infosIncompletes && (
+            <div style={{ marginTop: 10, padding: 10, background: "var(--warn-soft)", border: "1px solid var(--warn-soft)", borderRadius: 10, fontSize: 11, color: "var(--warn-ink)", lineHeight: 1.5, display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }}/>
+              <span>
+                Des mentions obligatoires manquent sur ce bon. Complétez-les dans
+                <b> Profil → Modifier mes informations</b> — elles apparaîtront
+                alors automatiquement sur tous vos bons.
+              </span>
+            </div>
+          )}
         </div>
 
         {booking.notes && (
