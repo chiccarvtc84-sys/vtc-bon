@@ -29,6 +29,9 @@ const PACKAGE_TOKENS = { pack20: 20, pack40: 40, pack50: 50, pack80: 80 };
 
 // Cache de l'init pour ne pas reconfigurer le SDK à chaque achat.
 let purchasesInitPromise = null;
+// Identité actuellement configurée dans le SDK — permet de détecter un
+// changement de compte (logout → login autre compte sur le même iPhone).
+let configuredUserId = null;
 
 function isIOSNative() {
   return isNativePlatform() && platformName() === 'ios';
@@ -41,23 +44,47 @@ function isIOSNative() {
  * l'init, les suivantes réutilisent la promesse résolue — même pattern que
  * `ensureStripeInit` dans applePay.js.
  *
+ * ⚠️ Audit 2026-07-29 — deux pièges corrigés :
+ * - Changement de compte : l'init était figée sur le PREMIER userId — un
+ *   achat après logout/login d'un autre compte aurait été crédité à
+ *   l'ancien utilisateur (app_user_id périmé côté webhook). On réaligne
+ *   désormais l'identité via Purchases.logIn si le userId change.
+ * - Échec transitoire : une promesse d'init REJETÉE restait en cache pour
+ *   toujours → tout achat échouait jusqu'au redémarrage de l'app. On vide
+ *   le cache en cas d'échec pour permettre une nouvelle tentative.
+ *
  * @param {string} userId
  */
 async function ensurePurchasesInit(userId) {
   if (!isIOSNative()) return false;
-  if (purchasesInitPromise) return purchasesInitPromise;
 
-  purchasesInitPromise = (async () => {
-    const apiKey = import.meta.env.VITE_REVENUECAT_API_KEY;
-    if (!apiKey) {
-      throw new Error('VITE_REVENUECAT_API_KEY manquante dans .env');
-    }
+  if (!purchasesInitPromise) {
+    purchasesInitPromise = (async () => {
+      const apiKey = import.meta.env.VITE_REVENUECAT_API_KEY;
+      if (!apiKey) {
+        throw new Error('VITE_REVENUECAT_API_KEY manquante dans .env');
+      }
+      const { Purchases } = await import('@revenuecat/purchases-capacitor');
+      await Purchases.configure({ apiKey, appUserID: userId });
+      configuredUserId = userId;
+      return true;
+    })().catch((err) => {
+      purchasesInitPromise = null; // ne jamais mettre en cache un échec
+      throw err;
+    });
+    return purchasesInitPromise;
+  }
+
+  await purchasesInitPromise;
+
+  // Changement de compte sur le même appareil : réaligner l'identité
+  // RevenueCat, sinon l'achat serait crédité à l'ancien utilisateur.
+  if (userId && userId !== configuredUserId) {
     const { Purchases } = await import('@revenuecat/purchases-capacitor');
-    await Purchases.configure({ apiKey, appUserID: userId });
-    return true;
-  })();
-
-  return purchasesInitPromise;
+    await Purchases.logIn({ appUserID: userId });
+    configuredUserId = userId;
+  }
+  return true;
 }
 
 /**

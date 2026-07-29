@@ -679,12 +679,24 @@ export async function loadInvoices(userId) {
 
 /** Crée une facture à partir d'un bon (consomme 1 crédit) */
 export async function createInvoice(userId, booking) {
-  // Récupérer le dernier numéro
+  const year = new Date().getFullYear();
+
+  // Récupérer le dernier numéro FAC- de l'année.
+  // ⚠️ Filtrer sur le préfixe FAC- est indispensable : la table invoices
+  // contient AUSSI les factures d'achat de crédits TRP-YYYY-NNNN insérées
+  // par les webhooks Stripe/RevenueCat pour ce même user_id, avec un
+  // compteur GLOBAL à toute l'app. Sans le filtre, la regex (\d+)$ lisait
+  // indifféremment TRP-2026-0127 → saut de numérotation (rupture CGI), ou
+  // pire : recul du compteur → collision UNIQUE(user_id, invoice_number)
+  // → plus AUCUNE facture émissible. On trie sur invoice_number (zero-padded
+  // → ordre lexicographique = ordre numérique) plutôt que created_at pour
+  // prendre le vrai maximum de la série.
   const { data: lastInvoice } = await supabase
     .from('invoices')
     .select('invoice_number')
     .eq('user_id', userId)
-    .order('created_at', { ascending: false })
+    .like('invoice_number', `FAC-${year}-%`)
+    .order('invoice_number', { ascending: false })
     .limit(1)
     .maybeSingle();
 
@@ -694,7 +706,6 @@ export async function createInvoice(userId, booking) {
     if (match) nextNum = parseInt(match[1]) + 1;
   }
 
-  const year = new Date().getFullYear();
   const invoiceNumber = `FAC-${year}-${String(nextNum).padStart(4, '0')}`;
   const fingerprint = await generateFingerprint(booking, invoiceNumber);
   const vatAmount = +(booking.price * 0.10 / 1.10).toFixed(2);

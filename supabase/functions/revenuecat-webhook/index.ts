@@ -125,10 +125,14 @@ async function handlePurchaseEvent(
     );
   }
 
-  // RevenueCat reporte le prix réellement payé (converti dans la devise
-  // locale) — on lui fait confiance plutôt que de recalculer depuis le
-  // catalogue figé, pour refléter le montant exact prélevé par Apple.
-  const amountTtc = typeof event.price === "number" ? event.price : 0;
+  // ⚠️ Audit 2026-07-29 : dans les webhooks RevenueCat, `price` est exprimé
+  // en USD (converti) — le montant réellement payé dans la devise de
+  // l'acheteur (EUR pour nos chauffeurs) est `price_in_purchased_currency`.
+  // Facturer `price` aurait inscrit un montant USD sur une facture en euros.
+  const amountTtc =
+    typeof event.price_in_purchased_currency === "number" ? event.price_in_purchased_currency
+    : typeof event.price === "number" ? event.price
+    : 0;
 
   // 1. Crédit des tokens via RPC (idempotent grâce à revenuecat_transaction_id)
   const { data: credited, error: creditError } = await supabase.rpc(
@@ -226,7 +230,8 @@ interface RevenueCatEvent {
   app_user_id?: string;
   product_id?: string;
   transaction_id?: string;
-  price?: number;
+  price?: number;                       // USD (converti par RevenueCat)
+  price_in_purchased_currency?: number; // montant payé dans la devise réelle
   currency?: string;
   environment?: string;
 }
