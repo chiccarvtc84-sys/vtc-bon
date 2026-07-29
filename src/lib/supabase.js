@@ -7,9 +7,34 @@
 // ============================================================================
 
 import { createClient } from '@supabase/supabase-js';
+import { preferencesGet, preferencesSet, preferencesRemove } from './platform.js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+// ----------------------------------------------------------------------------
+// Stockage durable de la session auth
+// ----------------------------------------------------------------------------
+// Par défaut supabase-js garde la session dans localStorage — or sur iOS,
+// WKWebView peut PURGER localStorage (pression disque, maintenance système,
+// longues périodes d'inactivité) → session perdue → l'utilisateur se retrouve
+// déconnecté aléatoirement. On stocke donc la session dans les Préférences
+// natives (UserDefaults iOS / SharedPreferences Android), qui ne sont jamais
+// purgées. Sur web, preferences* retombe sur localStorage : inchangé.
+const authStorage = {
+  getItem: async (key) => {
+    const value = await preferencesGet(key);
+    if (value !== null && value !== undefined) return value;
+    // Migration douce : session posée par l'ANCIEN stockage (localStorage,
+    // avant ce fix). On la récupère et on la copie dans les Préférences pour
+    // ne pas déconnecter l'utilisateur lors de la mise à jour de l'app.
+    const legacy = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+    if (legacy !== null) await preferencesSet(key, legacy);
+    return legacy;
+  },
+  setItem: async (key, value) => { await preferencesSet(key, value); },
+  removeItem: async (key) => { await preferencesRemove(key); },
+};
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.error("⚠️ Supabase URL ou Anon Key manquante dans .env");
@@ -35,6 +60,7 @@ export const supabase =
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
+      storage: authStorage,
     },
   }));
 

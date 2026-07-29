@@ -2623,12 +2623,15 @@ function BookingDetailSheet({ booking, invoiced, onBack, ...rest }) {
               : <span className={`tp-chip ${isPending ? "tp-chip-warn" : "tp-chip-success"}`} style={{ flexShrink: 0 }}>{isPending ? "En attente" : "Confirmée"}</span>}
             {expanded ? <ChevronDown size={16} style={{ color: "var(--muted)", flexShrink: 0 }}/> : <ChevronUp size={16} style={{ color: "var(--muted)", flexShrink: 0 }}/>}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "var(--text-dim)" }}>
+          {/* ⚠️ minWidth: 0 obligatoire sur les adresses : avec whiteSpace nowrap,
+              un flex item refuse sinon de rétrécir sous la largeur de son texte
+              → une adresse longue poussait toute la ligne hors de l'écran. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "var(--text-dim)", overflow: "hidden" }}>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--text)", flexShrink: 0 }}/>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{booking.pickupAddress}</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flexShrink: 1 }}>{booking.pickupAddress}</span>
             <ChevronRight size={11} style={{ color: "var(--muted)", flexShrink: 0 }}/>
             <span style={{ width: 6, height: 6, borderRadius: 2, background: "var(--accent)", flexShrink: 0 }}/>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{booking.dropoffAddress}</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flexShrink: 1 }}>{booking.dropoffAddress}</span>
           </div>
         </div>
 
