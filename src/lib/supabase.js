@@ -742,77 +742,35 @@ export async function loadInvoices(userId) {
   return data;
 }
 
-/** Crée une facture à partir d'un bon (consomme 1 crédit) */
+/**
+ * Crée une facture à partir d'un bon (consomme 1 crédit).
+ *
+ * ⚠️ Tout se passe dans UNE transaction SQL (RPC create_invoice_for_booking) :
+ * numérotation FAC-YYYY-NNNN sous verrou, contrôle du solde, insertion de la
+ * facture et débit du crédit.
+ *
+ * L'ancienne version enchaînait 3 requêtes réseau (INSERT facture → RPC
+ * consume_tokens → DELETE de rollback si échec). Deux défauts, tous deux
+ * corrigés par le passage en RPC :
+ *  - la table invoices n'a AUCUNE policy DELETE (volontaire : une facture
+ *    émise ne se supprime pas, art. 242 nonies A CGI). Sous RLS ce DELETE ne
+ *    levait pas d'erreur, il supprimait 0 ligne : le rollback était un no-op
+ *    silencieux, laissant une facture fantôme et un numéro consommé ;
+ *  - sur réseau lent, réessayer produisait une SECONDE facture pour la même
+ *    course. La RPC refuse désormais tout bon déjà facturé.
+ */
 export async function createInvoice(userId, booking) {
-  const year = new Date().getFullYear();
-
-  // Récupérer le dernier numéro FAC- de l'année.
-  // ⚠️ Filtrer sur le préfixe FAC- est indispensable : la table invoices
-  // contient AUSSI les factures d'achat de crédits TRP-YYYY-NNNN insérées
-  // par les webhooks Stripe/RevenueCat pour ce même user_id, avec un
-  // compteur GLOBAL à toute l'app. Sans le filtre, la regex (\d+)$ lisait
-  // indifféremment TRP-2026-0127 → saut de numérotation (rupture CGI), ou
-  // pire : recul du compteur → collision UNIQUE(user_id, invoice_number)
-  // → plus AUCUNE facture émissible. On trie sur invoice_number (zero-padded
-  // → ordre lexicographique = ordre numérique) plutôt que created_at pour
-  // prendre le vrai maximum de la série.
-  const { data: lastInvoice } = await supabase
-    .from('invoices')
-    .select('invoice_number')
-    .eq('user_id', userId)
-    .like('invoice_number', `FAC-${year}-%`)
-    .order('invoice_number', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  let nextNum = 1;
-  if (lastInvoice) {
-    const match = lastInvoice.invoice_number.match(/(\d+)$/);
-    if (match) nextNum = parseInt(match[1]) + 1;
-  }
-
-  const invoiceNumber = `FAC-${year}-${String(nextNum).padStart(4, '0')}`;
-  const fingerprint = await generateFingerprint(booking, invoiceNumber);
-  const vatAmount = +(booking.price * 0.10 / 1.10).toFixed(2);
-
-  // Insertion de la facture
-  const { data, error } = await supabase
-    .from('invoices')
-    .insert({
-      user_id: userId,
-      booking_id: booking.id,
-      invoice_number: invoiceNumber,
-      customer_name: booking.customerName,
-      amount_ht: booking.price - vatAmount,
-      amount_vat: vatAmount,
-      amount_ttc: booking.price,
-      vat_rate: 10,
-      status: 'pending',
-      fingerprint,
-    })
-    .select()
-    .single();
-
-  if (error) throw error;
-
-  // Consommation d'un crédit (avec capture explicite de l'erreur RPC,
-  // cf. createBooking pour la justif).
-  const { data: consumed, error: consumeErr } = await supabase.rpc('consume_tokens', {
+  const { data, error } = await supabase.rpc('create_invoice_for_booking', {
     p_user_id: userId,
-    p_amount: 1,
-    p_kind: 'consume_invoice',
-    p_related_id: data.id,
+    p_booking_id: booking.id,
   });
 
-  if (consumeErr) {
-    await supabase.from('invoices').delete().eq('id', data.id);
-    throw new Error(`consume_tokens RPC échouée : ${consumeErr.message || consumeErr}`);
+  if (error) {
+    // Messages métier remontés tels quels (l'appelant les reconnaît déjà) :
+    // « Crédits insuffisants », « Ce bon a déjà été facturé ».
+    throw new Error(error.message || 'Émission de la facture impossible');
   }
-
-  if (!consumed) {
-    await supabase.from('invoices').delete().eq('id', data.id);
-    throw new Error("Crédits insuffisants");
-  }
+  if (!data) throw new Error('Émission de la facture impossible');
 
   return data;
 }
@@ -1147,15 +1105,9 @@ export async function creditReferralBonus(referrerId, refereeId) {
 // Utilitaires
 // ----------------------------------------------------------------------------
 
-/** Génère une empreinte cryptographique pour une facture (immutabilité) */
-async function generateFingerprint(booking, invoiceNumber) {
-  const data = `${booking.id}-${invoiceNumber}-${booking.price}-${Date.now()}`;
-  const encoder = new TextEncoder();
-  const dataBuffer = encoder.encode(data);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
+// Note : l'empreinte fiscale des factures est désormais calculée côté SQL,
+// dans la RPC create_invoice_for_booking — elle dépend du numéro de facture,
+// qui n'est attribué qu'à l'intérieur de la transaction verrouillée.
 
 /** Génère un device fingerprint basique pour anti-fraude */
 export function generateDeviceFingerprint() {

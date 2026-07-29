@@ -3559,7 +3559,12 @@ function PurchaseModal({ open, onClose, onConfirm }) {
     const purchase = {
       id: genId(),
       packageId: pack.id,
-      invoiceNumber: `TRP-2026-${String(Math.floor(Math.random() * 9000) + 1000)}`,
+      // ⚠️ Pas de numéro de facture inventé ici : la VRAIE facture est créée
+      // par le webhook de paiement, avec son propre numéro chronologique.
+      // Auparavant on affichait un TRP-2026-<aléatoire> au format identique,
+      // que le chauffeur pouvait noter pour sa comptabilité alors qu'il ne
+      // correspondait à aucune facture existante.
+      invoiceNumber: null,
       date: new Date().toISOString().slice(0, 10),
       package: pack.label,
       tokens: pack.tokens,
@@ -3797,10 +3802,17 @@ function PurchaseModal({ open, onClose, onConfirm }) {
               </div>
 
               <div className="tp-card" style={{ padding: 14, background: "var(--surface)", marginBottom: 14 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
-                  <span style={{ color: "var(--text-dim)" }}>Facture</span>
-                  <span style={{ fontWeight: 600, fontFamily: "monospace" }}>{result.invoiceNumber}</span>
-                </div>
+                {result.invoiceNumber ? (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
+                    <span style={{ color: "var(--text-dim)" }}>Facture</span>
+                    <span style={{ fontWeight: 600, fontFamily: "monospace" }}>{result.invoiceNumber}</span>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
+                    <span style={{ color: "var(--text-dim)" }}>Facture</span>
+                    <span style={{ color: "var(--text-dim)" }}>en cours d'émission…</span>
+                  </div>
+                )}
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
                   <span style={{ color: "var(--text-dim)" }}>Montant</span>
                   <span style={{ fontWeight: 600 }}>{eur(result.priceTTC)}</span>
@@ -3811,10 +3823,12 @@ function PurchaseModal({ open, onClose, onConfirm }) {
                 </div>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
-                <button className="tp-btn tp-btn-ghost"><Mail size={15}/> Par email</button>
-                <button className="tp-btn tp-btn-ghost"><Download size={15}/> Télécharger</button>
-              </div>
+              {!result.invoiceNumber && (
+                <div style={{ fontSize: 11.5, color: "var(--text-dim)", lineHeight: 1.5, marginBottom: 12, textAlign: "center" }}>
+                  Votre facture apparaîtra dans quelques secondes dans
+                  <b> Jetons → Historique de vos achats</b>.
+                </div>
+              )}
 
               <button onClick={onClose} className="tp-btn tp-btn-primary" style={{ width: "100%" }}>Terminer</button>
             </div>
@@ -3828,9 +3842,22 @@ function PurchaseModal({ open, onClose, onConfirm }) {
 /* -------------------------------------------------------------------------
    PURCHASE DETAIL MODAL
    ------------------------------------------------------------------------- */
-function PurchaseDetailModal({ open, purchase, onClose }) {
-  const fingerprint = useMemo(() => genFingerprint(), [purchase?.id]);
+function PurchaseDetailModal({ open, purchase, onClose, currentUser = null, isGuest = false }) {
+  // Empreinte : celle de la VRAIE facture si on l'a. On ne regénère un
+  // pseudo-aléatoire qu'en mode invité (démo) — auparavant, un compte réel
+  // voyait une empreinte différente à chaque ouverture, donc sans valeur.
+  const fingerprint = useMemo(
+    () => purchase?.fingerprint || (isGuest ? genFingerprint() : null),
+    [purchase?.id, purchase?.fingerprint, isGuest],
+  );
   if (!open || !purchase) return null;
+  // Coordonnées du chauffeur ACHETEUR : les vraies si un compte est connecté,
+  // les valeurs de démo seulement en mode invité.
+  const buyer = (!isGuest && currentUser) ? {
+    companyName: currentUser.companyName || currentUser.name || '—',
+    siret: currentUser.siret || '—',
+    vtcNumber: currentUser.evtcNumber || '—',
+  } : DRIVER_PROFILE;
   return (
     <div className="tp-overlay" onClick={onClose}>
       <div className="tp-sheet" onClick={(e) => e.stopPropagation()}>
@@ -3861,10 +3888,10 @@ function PurchaseDetailModal({ open, purchase, onClose }) {
 
             <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginBottom: 12 }}>
               <div className="tp-label" style={{ marginBottom: 4 }}>Facturé à</div>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{DRIVER_PROFILE.companyName}</div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{buyer.companyName}</div>
               <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2, lineHeight: 1.5 }}>
-                SIRET : {DRIVER_PROFILE.siret}<br/>
-                N° VTC : {DRIVER_PROFILE.vtcNumber}
+                SIRET : {buyer.siret}<br/>
+                N° VTC : {buyer.vtcNumber}
                 {purchase.vatIntra && <><br/>TVA intra : {purchase.vatIntra}</>}
               </div>
             </div>
@@ -3903,7 +3930,7 @@ function PurchaseDetailModal({ open, purchase, onClose }) {
             )}
 
             <div style={{ marginTop: 14, padding: 12, background: "var(--surface-2)", borderRadius: 10, display: "flex", gap: 12, alignItems: "center" }}>
-              <PseudoQR seed={fingerprint} size={64}/>
+              {fingerprint && <PseudoQR seed={fingerprint} size={64}/>}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Date de paiement</div>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{formatDate(purchase.date)}</div>
@@ -6675,6 +6702,34 @@ function invoiceFromDb(row) {
 // le chiffre d'affaires, ni dans l'export comptable des ventes.
 const isSalesInvoice = (inv) => !!inv && (!!inv.bookingId || String(inv.number || '').startsWith('FAC-'));
 
+// Traduit une erreur technique en message actionnable pour le chauffeur.
+// Avant, il voyait des popups du type « consume_tokens RPC échouée :
+// TypeError: Failed to fetch » ou des erreurs Postgres brutes en anglais,
+// sans savoir si son crédit avait été débité ni quoi faire.
+function humanizeError(err) {
+  const msg = String(err?.message || err || '');
+  if (/failed to fetch|networkerror|network request failed|load failed/i.test(msg)) {
+    return "Pas de connexion Internet. Vérifiez votre réseau, puis réessayez — rien n'a été enregistré.";
+  }
+  if (/aborterror|timeout|timed out/i.test(msg)) {
+    return "Le réseau est trop lent, l'opération a été interrompue. Réessayez dans un instant.";
+  }
+  if (/duplicate key|unique constraint/i.test(msg)) {
+    return "Cette opération a déjà été enregistrée. Actualisez l'écran pour voir le résultat.";
+  }
+  if (/cr[ée]dits? insuffisants?/i.test(msg)) {
+    return "Crédits insuffisants. Rechargez votre compte pour continuer.";
+  }
+  if (/factur[ée]/i.test(msg)) {
+    return "Ce bon a déjà été facturé : ses informations ne peuvent plus être modifiées (conformité fiscale).";
+  }
+  if (/jwt|not authenticated|session/i.test(msg)) {
+    return "Votre session a expiré. Reconnectez-vous pour continuer.";
+  }
+  // Dernier recours : message générique, sans jargon technique.
+  return "Une erreur est survenue. Réessayez ; si le problème persiste, redémarrez l'application.";
+}
+
 function tokenTxFromDb(row) {
   if (!row) return null;
   // Mapping vers le format historique côté React (champ "tokens", "package", etc.)
@@ -6846,6 +6901,9 @@ export default function App() {
   // réseau lent, un double-tap déclenchait deux fois la même action (2 bons
   // créés, 2 crédits débités, ou 2 factures pour une même course).
   const busyActionRef = useRef(null);
+  // Dernier utilisateur pour lequel les données ont été chargées — évite de
+  // tout recharger sur chaque ré-émission de SIGNED_IN (retour au premier plan).
+  const loadedUserIdRef = useRef(null);
   // Retour du lien « Mot de passe oublié » : impose le choix d'un nouveau
   // mot de passe avant tout accès à l'app.
   const [passwordRecovery, setPasswordRecovery] = useState(false);
@@ -7187,9 +7245,21 @@ export default function App() {
       }
       if (mounted && session?.user) {
         setIsGuest(false);
-        const ok = await loadUserData(session.user.id);
+        // ⚠️ loadUserData enchaîne une dizaine de requêtes Supabase sans
+        // timeout propre. Sur un réseau « zombie » (portail captif, tunnel,
+        // antenne saturée : la couche réseau se dit connectée mais les
+        // sockets pendent), le splash restait affiché indéfiniment, sans
+        // même le bouton Réessayer — seul un kill de l'app en sortait.
+        // On plafonne donc à 12 s, après quoi on rend la main à l'UI.
+        const ok = await Promise.race([
+          loadUserData(session.user.id),
+          new Promise((resolve) => setTimeout(() => resolve(false), 12000)),
+        ]);
         if (mounted) await handleCheckoutReturn(session.user.id);
         if (mounted && ok) setAuthScreen(null);
+        if (mounted && !ok) {
+          console.warn('[AUTH] loadUserData timeout/échec — écran de reprise');
+        }
       }
       if (mounted) setAuthChecked(true);
     })();
@@ -7205,6 +7275,14 @@ export default function App() {
         return;
       }
       if (event === 'SIGNED_IN' && session?.user) {
+        // ⚠️ supabase-js ré-émet SIGNED_IN à chaque re-détection de session,
+        // notamment au retour de l'app au premier plan (très fréquent en
+        // WebView : le chauffeur décroche un appel de 30 s et revient).
+        // Sans ce garde, chaque retour rechargeait ~6 requêtes ET renvoyait
+        // brutalement l'utilisateur sur l'Accueil, en perdant l'écran ou le
+        // formulaire en cours.
+        if (loadedUserIdRef.current === session.user.id) return;
+        loadedUserIdRef.current = session.user.id;
         setIsGuest(false);
         // ⚠️ CRITIQUE : on déferre TOUT travail async via setTimeout(..., 0).
         // Sans ça, le callback async bloque le verrou interne du SDK Supabase,
@@ -7224,6 +7302,7 @@ export default function App() {
           }
         }, 0);
       } else if (event === 'SIGNED_OUT') {
+        loadedUserIdRef.current = null;
         setCurrentUser(null);
         setIsGuest(false);
         setBookings([]);
@@ -7548,7 +7627,7 @@ export default function App() {
         setFormInitial(null);
         alert("Ce bon a déjà été facturé : ses informations ne peuvent plus être modifiées (conformité fiscale).\n\nUtilisez « Dupliquer » pour une nouvelle course.");
       } else {
-        alert(`Erreur : ${msg}`);
+        alert(humanizeError(err));
       }
     }
   };
@@ -7569,7 +7648,7 @@ export default function App() {
       // Annule les rappels associés (T-3h / T-1h / T-15m)
       cancelBookingReminders(b.id).catch((e) => console.warn('cancel:', e?.message));
     } catch (err) {
-      alert(`Erreur lors de la suppression : ${err?.message || err}`);
+      alert(humanizeError(err));
     }
   };
 
@@ -7626,7 +7705,7 @@ export default function App() {
         setPendingActionLabel("émettre cette facture");
         setInsufficientOpen(true);
       } else {
-        alert(`Erreur : ${msg}`);
+        alert(humanizeError(err));
       }
     }
   };
@@ -8066,7 +8145,7 @@ export default function App() {
           )}
           <VoiceCapture open={voiceOpen} onClose={() => setVoiceOpen(false)} onConfirm={onVoiceConfirm}/>
           <PurchaseModal open={purchaseOpen} onClose={() => setPurchaseOpen(false)} onConfirm={onPurchaseConfirm}/>
-          <PurchaseDetailModal open={!!purchaseDetail} purchase={purchaseDetail} onClose={() => setPurchaseDetail(null)}/>
+          <PurchaseDetailModal open={!!purchaseDetail} purchase={purchaseDetail} currentUser={currentUser} isGuest={isGuest} onClose={() => setPurchaseDetail(null)}/>
           <EditProfileModal
             open={profileEditOpen}
             currentUser={currentUser}
