@@ -335,6 +335,16 @@ const formatDateTime = (iso) => {
   return d.toLocaleString("fr-FR", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 };
 const formatDate = (iso) => new Date(iso).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
+// Formate une Date pour un <input type="datetime-local">, qui attend de
+// l'heure LOCALE. ⚠️ Ne jamais utiliser toISOString() ici : il convertit en
+// UTC, donc en France (UTC+1/+2) l'heure affichée reculait de 1 à 2 h — une
+// course dictée « à 12h30 » se pré-remplissait à 10:30, et un bon créé
+// « maintenant » était daté dans le passé (donc jamais listé en « Prochaine
+// course » ni rappelé par les notifications).
+const toLocalInput = (d) => {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
 const genId = () => Math.random().toString(36).slice(2, 10);
 const genFingerprint = () => Array.from({length:16},()=>"0123456789abcdef"[Math.floor(Math.random()*16)]).join("");
 
@@ -1291,8 +1301,13 @@ function HomeScreen({ bookings, invoices, tokenBalance, isGuest, currentUser, on
     .filter(b => new Date(b.dateTime).getTime() > now)
     .sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime))
     .slice(0, 20);
-  const next = upcoming[0] || null;
-  const rest = upcoming.slice(1);
+  // La course EN COURS reste le hero même une fois son heure de prise en
+  // charge dépassée (retard, trajet d'approche) : sinon, à 14h03 pour une
+  // course de 14h00 démarrée à 13h50, le suivi GPS et le bouton
+  // « Je suis arrivé » disparaissaient et la course devenait interminable.
+  const activeTrip = activeTripId ? bookings.find(b => b.id === activeTripId) : null;
+  const next = activeTrip || upcoming[0] || null;
+  const rest = upcoming.filter(b => b.id !== next?.id);
 
   return (
     // Scroll unique (comme les apps de référence), plus simple et plus aéré
@@ -1465,7 +1480,14 @@ function BookingCard({ booking, onClick }) {
    ------------------------------------------------------------------------- */
 function VoiceCapture({ open, onClose, onConfirm }) {
   // ---- États ----
-  const [listening, setListening] = useState(false);
+  const [listening, setListeningState] = useState(false);
+  // Miroir en ref : `r.onend` (posé dans startNewRecognition) capture la valeur
+  // de `listening` AU MOMENT où la session est créée — or start() crée la
+  // session AVANT setListening(true), donc la closure voyait toujours `false`
+  // et le redémarrage automatique après une coupure Chrome (~2 s de silence)
+  // ne se déclenchait jamais : la suite de la dictée était perdue.
+  const listeningRef = useRef(false);
+  const setListening = (v) => { listeningRef.current = v; setListeningState(v); };
   const [transcript, setTranscript] = useState("");        // texte cumulé (final + interim)
   const [finalTranscript, setFinalTranscript] = useState(""); // que les chunks finalisés
   const [parsed, setParsed] = useState(null);
@@ -1618,7 +1640,7 @@ function VoiceCapture({ open, onClose, onConfirm }) {
     r.onend = () => {
       // Si l'utilisateur n'a pas explicitement demandé l'arrêt, on relance
       // une nouvelle session : Chrome tronque parfois à ~2s de silence.
-      if (!isStoppingRef.current && listening) {
+      if (!isStoppingRef.current && listeningRef.current) {
         try {
           recognitionRef.current = startNewRecognition();
           recognitionRef.current?.start();
@@ -1752,7 +1774,7 @@ function VoiceCapture({ open, onClose, onConfirm }) {
     const [h,m] = (parsed.time || "09:00").split(":");
     today.setHours(parseInt(h||"9"), parseInt(m||"0"), 0, 0);
     if (today < new Date()) today.setDate(today.getDate() + 1);
-    const iso = today.toISOString().slice(0, 16);
+    const iso = toLocalInput(today);
     onConfirm({
       customerName: parsed.customerName || "",
       pickupAddress: parsed.pickupAddress || "",
@@ -2158,11 +2180,15 @@ function AddressSearchField({ value, onChange, placeholder, near, frequent = [] 
 function BookingForm({ initial, bookings = [], onCancel, onSave }) {
   const [form, setForm] = useState({
     customerName: "", phone: "", pickupAddress: "", dropoffAddress: "",
-    dateTime: new Date().toISOString().slice(0,16),
+    dateTime: toLocalInput(new Date()),
     passengers: 1, hasLuggage: false, distance: 10, duration: 20,
     price: 0, notes: "", type: "forfait",
     ...(initial || {}),
   });
+  const [saving, setSaving] = useState(false);
+  // Id stable pour un nouveau bon : garantit qu'un double envoi ne peut pas
+  // produire deux bons distincts (cf. commentaire sur le bouton d'envoi).
+  const newIdRef = useRef(genId());
   const [pickupSuggestOpen, setPickupSuggestOpen] = useState(false);
   const [dropoffSuggestOpen, setDropoffSuggestOpen] = useState(false);
   const [clientPickerOpen, setClientPickerOpen] = useState(false);
@@ -2477,9 +2503,29 @@ function BookingForm({ initial, bookings = [], onCancel, onSave }) {
         )}
 
         <div style={{ display: "flex", gap: 8, paddingBottom: 20 }}>
-          <button onClick={onCancel} className="tp-btn tp-btn-ghost" style={{ flex: 1 }}>Annuler</button>
-          <button onClick={() => onSave({ ...form, id: form.id || genId(), status: "confirmed", createdAt: form.createdAt || new Date().toISOString() })} className="tp-btn tp-btn-primary" style={{ flex: 2 }}>
-            <Check size={16}/> Enregistrer le bon
+          <button onClick={onCancel} disabled={saving} className="tp-btn tp-btn-ghost" style={{ flex: 1 }}>Annuler</button>
+          {/* ⚠️ Deux protections contre le double-tap sur réseau lent (3G, tunnel),
+              qui créait 2 bons et consommait 2 crédits :
+              1. `saving` désactive le bouton et montre que ça travaille ;
+              2. l'id est tiré d'une ref STABLE (newIdRef) et non d'un genId()
+                 rappelé à chaque clic — même si deux appels passaient malgré
+                 tout, ils porteraient le même id et non deux bons distincts. */}
+          <button
+            onClick={async () => {
+              if (saving) return;
+              setSaving(true);
+              try {
+                await onSave({ ...form, id: form.id || newIdRef.current, status: "confirmed", createdAt: form.createdAt || new Date().toISOString() });
+              } finally {
+                setSaving(false);
+              }
+            }}
+            disabled={saving}
+            className="tp-btn tp-btn-primary"
+            style={{ flex: 2, opacity: saving ? 0.7 : 1 }}>
+            {saving
+              ? <><Loader2 size={16} style={{ animation: "tp-spin 1s linear infinite" }}/> Enregistrement…</>
+              : <><Check size={16}/> Enregistrer le bon</>}
           </button>
         </div>
       </div>
@@ -6645,6 +6691,10 @@ export default function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [dataLoading, setDataLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
+  // Verrou anti-réentrance sur les actions qui consomment un crédit : sur
+  // réseau lent, un double-tap déclenchait deux fois la même action (2 bons
+  // créés, 2 crédits débités, ou 2 factures pour une même course).
+  const busyActionRef = useRef(null);
 
   // --- Détection réseau (Wi-Fi / cellulaire / hors-ligne) ---
   // Branche @capacitor/network sur mobile, navigator.onLine en web.
@@ -7258,6 +7308,18 @@ export default function App() {
   };
 
   const onSaveBooking = async (b) => {
+    // Anti-réentrance (double-tap sur réseau lent) — complète le verrou visuel
+    // du bouton dans BookingForm.
+    if (busyActionRef.current === `save:${b.id}`) return;
+    busyActionRef.current = `save:${b.id}`;
+    try {
+      await doSaveBooking(b);
+    } finally {
+      busyActionRef.current = null;
+    }
+  };
+
+  const doSaveBooking = async (b) => {
     if (isGuest) {
       // Mode invité : pas de persistance, juste local
       setBookings(prev => {
@@ -7344,6 +7406,19 @@ export default function App() {
   };
 
   const onInvoiceBooking = async (b) => {
+    // Anti double-tap : facturer deux fois le même bon créerait deux factures
+    // (deux numéros consommés, 2 crédits) ou remonterait une erreur Postgres
+    // brute à l'écran.
+    if (busyActionRef.current === `invoice:${b.id}`) return;
+    busyActionRef.current = `invoice:${b.id}`;
+    try {
+      await doInvoiceBooking(b);
+    } finally {
+      busyActionRef.current = null;
+    }
+  };
+
+  const doInvoiceBooking = async (b) => {
     if (tokenBalance < COST_INVOICE) {
       setPendingActionLabel("émettre cette facture");
       setInsufficientOpen(true);
@@ -7677,7 +7752,7 @@ export default function App() {
           id: undefined,
           createdAt: undefined,
           status: 'pending',
-          dateTime: new Date().toISOString().slice(0, 16),
+          dateTime: toLocalInput(new Date()),
         });
         setFormOpen(true);
       }}

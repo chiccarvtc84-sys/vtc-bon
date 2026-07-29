@@ -18,12 +18,27 @@ const SEP = ';';
 // BOM UTF-8 (3 bytes) pour qu'Excel reconnaisse l'encoding
 const BOM = '﻿';
 
+// Une cellule commençant par l'un de ces caractères est interprétée comme une
+// FORMULE par Excel/LibreOffice/Google Sheets — y compris quand elle est entre
+// guillemets dans le CSV. Comme le nom du client et les adresses sont de la
+// saisie libre, un client malveillant (ou un simple copier-coller) peut faire
+// exécuter une formule chez le comptable qui ouvre l'export.
+const FORMULA_TRIGGERS = /^[=+\-@\t\r]/;
+// Les montants français produits par formatNumber ("1234,50", "-12,50")
+// commencent parfois par « - » : on ne doit pas les neutraliser, sinon Excel
+// les traiterait comme du texte et les totaux ne se calculeraient plus.
+const PLAIN_NUMBER = /^-?[\d\s.,]+$/;
+
 /**
  * Échappe une valeur CSV : guillemets autour si la valeur contient
  * `;`, `"`, `\r` ou `\n`. Les guillemets internes sont doublés.
+ * Neutralise aussi les formules (préfixe apostrophe, invisible à l'affichage).
  */
 function escape(value) {
-  const s = value === null || value === undefined ? '' : String(value);
+  let s = value === null || value === undefined ? '' : String(value);
+  if (FORMULA_TRIGGERS.test(s) && !PLAIN_NUMBER.test(s)) {
+    s = `'${s}`;
+  }
   if (s.includes(SEP) || s.includes('"') || s.includes('\n') || s.includes('\r')) {
     return `"${s.replace(/"/g, '""')}"`;
   }
