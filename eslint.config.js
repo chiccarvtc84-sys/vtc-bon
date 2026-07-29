@@ -40,6 +40,8 @@ export default [
         TextEncoder: 'readonly', TextDecoder: 'readonly',
         AbortController: 'readonly', CustomEvent: 'readonly',
         Notification: 'readonly', screen: 'readonly',
+        ResizeObserver: 'readonly', IntersectionObserver: 'readonly',
+        MutationObserver: 'readonly', PointerEvent: 'readonly',
         // Node (scripts/*.mjs, vite.config.js)
         process: 'readonly', Buffer: 'readonly',
       },
